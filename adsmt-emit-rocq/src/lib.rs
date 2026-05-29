@@ -175,18 +175,23 @@ fn emit_step(step: &Step, out: &mut String) {
             .unwrap();
         }
         StepBody::Trans { lhs, rhs } => {
-            // Statement type-checks; proof reconstruction is v0.17 work.
+            // v0.18 K: real proof term — eq_trans applied to
+            // the two parent step results.
             writeln!(
                 out,
-                "Theorem {name} : {concl_rocq}.\nAdmitted. (* eapply eq_trans; [exact s{} | exact s{}] *)",
+                "Theorem {name} : {concl_rocq}.\nProof. exact (eq_trans s{} s{}). Qed.",
                 lhs.0, rhs.0,
             )
             .unwrap();
         }
         StepBody::EqMp { iff, p } => {
+            // v0.18 K: real proof term. Coq's `<->` (iff)
+            // is defined as `(A -> B) /\ (B -> A)`, so `proj1`
+            // pulls the forward implication. Then apply to the
+            // proven antecedent.
             writeln!(
                 out,
-                "Theorem {name} : {concl_rocq}.\nAdmitted. (* apply (proj1 s{}); exact s{} *)",
+                "Theorem {name} : {concl_rocq}.\nProof. exact (proj1 s{} s{}). Qed.",
                 iff.0, p.0,
             )
             .unwrap();
@@ -544,6 +549,39 @@ mod tests {
         let cert = b.snapshot(step_id);
         let result = try_emit_rocq(&cert);
         assert!(matches!(result, Err(MissingImports(_))));
+    }
+
+    #[test]
+    fn trans_emits_proof_term_not_admitted() {
+        use adsmt_cert::canonical::{Sequent, StepBody};
+        let mut b = adsmt_cert::canonical::CertBuilder::default();
+        let a0 = r::assume(&mut b, p()).unwrap();
+        let a1 = r::assume(&mut b, p()).unwrap();
+        let trans_id = b.add(
+            StepBody::Trans { lhs: a0.step(), rhs: a1.step() },
+            Sequent { hyps: vec![], concl: p() },
+        );
+        let cert = b.snapshot(trans_id);
+        let s = emit_rocq(&cert);
+        assert!(s.contains("Proof. exact (eq_trans s0 s1). Qed."));
+        // Ensure the old Admitted stub is gone for Trans.
+        assert!(!s.contains("Admitted. (* eapply eq_trans"));
+    }
+
+    #[test]
+    fn eqmp_emits_proof_term_not_admitted() {
+        use adsmt_cert::canonical::{Sequent, StepBody};
+        let mut b = adsmt_cert::canonical::CertBuilder::default();
+        let a0 = r::assume(&mut b, p()).unwrap();
+        let a1 = r::assume(&mut b, p()).unwrap();
+        let eqmp_id = b.add(
+            StepBody::EqMp { iff: a0.step(), p: a1.step() },
+            Sequent { hyps: vec![], concl: p() },
+        );
+        let cert = b.snapshot(eqmp_id);
+        let s = emit_rocq(&cert);
+        assert!(s.contains("Proof. exact (proj1 s0 s1). Qed."));
+        assert!(!s.contains("Admitted. (* apply (proj1"));
     }
 
     #[test]
