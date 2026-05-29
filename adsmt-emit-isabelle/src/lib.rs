@@ -493,6 +493,61 @@ mod tests {
     }
 
     #[test]
+    fn mid_block_pattern_markers_passing_validation_for_isabelle() {
+        // Isabelle's Main is classical so no extra import lands
+        // regardless of the contributing layer. This test
+        // confirms the contrib backend at least passes the
+        // hard validation when mid-block + pattern markers
+        // cover any (hypothetical) requirements via the shared
+        // aggregator.
+        use adsmt_cert::{
+            ClassicalMarkerSet, ClassicalModuleFamily, ClassicalSet, MidBlock,
+            MidBlockItem, PatternMarker, StepKindTag, StepPattern,
+        };
+        let mut b = adsmt_cert::canonical::CertBuilder::default();
+        let h = r::assume(&mut b, p()).unwrap();
+        let step_id = h.step();
+        // Add a step-direct requirement that two layered markers
+        // cover.
+        b.set_direct_required_classical(
+            step_id,
+            ClassicalSet::from_iter([ClassicalModuleFamily::Propositional]),
+        );
+        // Mid-block exports the should.
+        let block = MidBlock {
+            name: Some("isa_block".into()),
+            contents: vec![MidBlockItem::Step(step_id)],
+            local_markers: ClassicalMarkerSet {
+                should: ClassicalSet::from_iter([
+                    ClassicalModuleFamily::Propositional,
+                ]),
+                allow: vec![],
+            },
+            exported_markers: ClassicalMarkerSet::empty(),
+        };
+        b.add_mid_block(block);
+        // Pattern marker doubles up.
+        b.add_pattern_marker(PatternMarker {
+            pattern: StepPattern::Kind(StepKindTag::Assume),
+            local_markers: ClassicalMarkerSet {
+                should: ClassicalSet::from_iter([
+                    ClassicalModuleFamily::Propositional,
+                ]),
+                allow: vec![],
+            },
+            name: Some("assume_marker".into()),
+            source_loc: None,
+        });
+        let cert = b.snapshot(step_id);
+        let result = try_emit_isabelle(&cert);
+        assert!(result.is_ok());
+        let s = result.unwrap();
+        // Main only — no Classical_* line.
+        assert!(s.contains("imports Main"));
+        assert_eq!(s.matches("imports").count(), 1);
+    }
+
+    #[test]
     fn try_emit_isabelle_succeeds_when_marker_covers_requirement() {
         use adsmt_cert::{ClassicalModuleFamily, ClassicalSet};
         let mut b = adsmt_cert::canonical::CertBuilder::default();

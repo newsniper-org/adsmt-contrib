@@ -547,6 +547,61 @@ mod tests {
     }
 
     #[test]
+    fn mid_block_marker_propagates_to_rocq_import() {
+        // Mid-block local_markers should contribute their
+        // `should` set to the file-level resolved imports via
+        // the shared aggregator (B). Test confirms the contrib
+        // backend picks up the new layer for free.
+        use adsmt_cert::{
+            ClassicalMarkerSet, ClassicalModuleFamily, ClassicalSet, MidBlock,
+            MidBlockItem,
+        };
+        let mut b = adsmt_cert::canonical::CertBuilder::default();
+        let h = r::assume(&mut b, p()).unwrap();
+        let step_id = h.step();
+        let block = MidBlock {
+            name: Some("rocq_block".into()),
+            contents: vec![MidBlockItem::Step(step_id)],
+            local_markers: ClassicalMarkerSet {
+                should: ClassicalSet::from_iter([
+                    ClassicalModuleFamily::Propositional,
+                ]),
+                allow: vec![],
+            },
+            exported_markers: ClassicalMarkerSet::empty(),
+        };
+        b.add_mid_block(block);
+        let cert = b.snapshot(step_id);
+        let s = emit_rocq(&cert);
+        assert!(s.contains("From Stdlib Require Import Classical_Prop."));
+    }
+
+    #[test]
+    fn pattern_marker_propagates_to_rocq_import() {
+        use adsmt_cert::{
+            ClassicalMarkerSet, ClassicalModuleFamily, ClassicalSet,
+            PatternMarker, StepKindTag, StepPattern,
+        };
+        let mut b = adsmt_cert::canonical::CertBuilder::default();
+        let h = r::assume(&mut b, p()).unwrap();
+        let step_id = h.step();
+        b.add_pattern_marker(PatternMarker {
+            pattern: StepPattern::Kind(StepKindTag::Assume),
+            local_markers: ClassicalMarkerSet {
+                should: ClassicalSet::from_iter([
+                    ClassicalModuleFamily::FunExt,
+                ]),
+                allow: vec![],
+            },
+            name: Some("assume_funext".into()),
+            source_loc: None,
+        });
+        let cert = b.snapshot(step_id);
+        let s = emit_rocq(&cert);
+        assert!(s.contains("From Stdlib Require Import FunctionalExtensionality."));
+    }
+
+    #[test]
     fn try_emit_rocq_succeeds_when_marker_covers_requirement() {
         use adsmt_cert::{ClassicalModuleFamily, ClassicalSet};
         let mut b = adsmt_cert::canonical::CertBuilder::default();
