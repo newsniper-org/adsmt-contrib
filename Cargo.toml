@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "adsmt-emit-rocq",
+    "adsmt-emit-isabelle",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later"
+
+[workspace.dependencies]
+# adsmt-cert provides the cert AST + the prover_emit::common
+# semantic anchors every backend mirrors. Default is a local path
+# dep so development against an unreleased adsmt rev works without
+# a github fetch; published builds replace this with the git rev
+# pin below.
+adsmt-cert = { path = "../AD1/adsmt-cert" }
+# adsmt-core is pulled transitively, but we depend on it directly
+# for `Term` / `Type` constructors in the emit shape.
+adsmt-core = { path = "../AD1/adsmt-core" }
+
+# Published-form alternative — uncomment to consume adsmt via git
+# rev pin instead of the local path. The rev must point at a
+# commit on adsmt-main where the prover_emit::common anchor is
+# wired in (i.e. ≥ 91e614a).
+#
+# adsmt-cert = { git = "https://github.com/Honey-Be/adsmt-private.git", rev = "91e614a" }
+# adsmt-core = { git = "https://github.com/Honey-Be/adsmt-private.git", rev = "91e614a" }

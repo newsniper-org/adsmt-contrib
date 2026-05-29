@@ -1,0 +1,12 @@
+[package]
+name = "adsmt-emit-isabelle"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Isabelle/HOL backend for adsmt-cert certificates. Mirrors the Lean emit shape exactly using Isar."
+repository = "https://github.com/Honey-Be/adsmt-contrib"
+
+[dependencies]
+adsmt-cert = { workspace = true }
+adsmt-core = { workspace = true }
