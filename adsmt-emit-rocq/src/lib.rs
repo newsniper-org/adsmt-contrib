@@ -97,11 +97,23 @@ pub struct MissingImports(
 /// does not subsume the required set.
 pub fn try_emit_rocq(cert: &Certificate) -> Result<String, MissingImports> {
     use adsmt_cert::prover_emit::common::{
-        aggregate_required, missing_imports, resolve_imports, rocq_import_line,
+        aggregate_required, missing_imports, resolve_imports_with_scan,
+        rocq_axiom_keywords, rocq_import_line,
     };
     use adsmt_cert::ClassicalSet;
 
-    let resolved = resolve_imports(cert, &ClassicalSet::empty(), &[]);
+    // v0.19 A.5: two-pass scan=true wiring.
+    // Pass 1 — preliminary render without classical imports.
+    // Pass 2 — resolve via scan honouring lazy+scan markers.
+    // Pass 3 — final render with resolved imports as prelude.
+    let preliminary = render_body(cert);
+    let resolved = resolve_imports_with_scan(
+        cert,
+        &ClassicalSet::empty(),
+        &[],
+        &preliminary,
+        rocq_axiom_keywords,
+    );
     let required = aggregate_required(cert);
     if !required.is_empty() {
         let missing = missing_imports(cert, &resolved);
@@ -156,6 +168,36 @@ pub fn try_emit_rocq(cert: &Certificate) -> Result<String, MissingImports> {
     }
     out.push_str("\nEnd AdsmtCert.\n");
     Ok(out)
+}
+
+/// Render the cert body **without** any classical-axiom prelude
+/// or the fixed Ltac2 prelude. Used by [`try_emit_rocq`]'s
+/// pass-1 preliminary render for the D1.B
+/// `lazy=true, scan=true` text-scan arm.
+fn render_body(cert: &Certificate) -> String {
+    let mut out = String::new();
+    out.push_str("Module AdsmtCert.\n\n");
+    let vars = collect_free_vars(cert);
+    if !vars.is_empty() {
+        for (name, ty_rocq) in &vars {
+            writeln!(out, "Parameter {name} : {ty_rocq}.").unwrap();
+        }
+        out.push('\n');
+    }
+    for step in &cert.steps {
+        emit_step(step, &mut out);
+    }
+    if let Some(seq) = cert.final_sequent() {
+        let concl_rocq = render_term(&seq.concl);
+        let final_id = format!("s{}", cert.conclusion.0);
+        writeln!(
+            out,
+            "\nTheorem result : {concl_rocq}.\nProof. exact {final_id}. Qed."
+        )
+        .unwrap();
+    }
+    out.push_str("\nEnd AdsmtCert.\n");
+    out
 }
 
 fn emit_step(step: &Step, out: &mut String) {

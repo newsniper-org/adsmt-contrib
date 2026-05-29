@@ -83,11 +83,24 @@ pub struct MissingImports(
 /// Fallible variant of [`emit_isabelle`].
 pub fn try_emit_isabelle(cert: &Certificate) -> Result<String, MissingImports> {
     use adsmt_cert::prover_emit::common::{
-        aggregate_required, missing_imports, resolve_imports,
+        aggregate_required, isabelle_axiom_keywords, missing_imports,
+        resolve_imports_with_scan,
     };
     use adsmt_cert::ClassicalSet;
 
-    let resolved = resolve_imports(cert, &ClassicalSet::empty(), &[]);
+    // v0.19 A.5: two-pass scan=true wiring. Isabelle's keyword
+    // table is empty (Main is classical), so the scan arm
+    // produces no extra imports. The two-pass shape is preserved
+    // for parity with Lean/Rocq — symmetric runtime cost matters
+    // less than predictable behaviour across backends.
+    let preliminary = render_body(cert);
+    let resolved = resolve_imports_with_scan(
+        cert,
+        &ClassicalSet::empty(),
+        &[],
+        &preliminary,
+        isabelle_axiom_keywords,
+    );
     let required = aggregate_required(cert);
     if !required.is_empty() {
         let missing = missing_imports(cert, &resolved);
@@ -124,6 +137,34 @@ pub fn try_emit_isabelle(cert: &Certificate) -> Result<String, MissingImports> {
     }
     out.push_str("\nend\n");
     Ok(out)
+}
+
+/// Render the cert body for [`try_emit_isabelle`]'s pass-1
+/// preliminary text. Identical shape to the final emit.
+fn render_body(cert: &Certificate) -> String {
+    let mut out = String::new();
+    out.push_str("theory AdsmtCert\n  imports Main\nbegin\n\n");
+    let vars = collect_free_vars(cert);
+    if !vars.is_empty() {
+        for (name, ty) in &vars {
+            writeln!(out, "consts {name} :: \"{ty}\"").unwrap();
+        }
+        out.push('\n');
+    }
+    for step in &cert.steps {
+        emit_step(step, &mut out);
+    }
+    if let Some(seq) = cert.final_sequent() {
+        let concl_isa = render_term(&seq.concl);
+        let final_id = format!("s{}", cert.conclusion.0);
+        writeln!(
+            out,
+            "\ntheorem result: \"{concl_isa}\" using {final_id} by simp"
+        )
+        .unwrap();
+    }
+    out.push_str("\nend\n");
+    out
 }
 
 fn emit_step(step: &Step, out: &mut String) {
