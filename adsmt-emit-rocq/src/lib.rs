@@ -239,33 +239,46 @@ fn emit_step(step: &Step, out: &mut String) {
             .unwrap();
         }
         StepBody::Deduct { a, b } => {
+            // v0.19 K-full: real proof term. Γ ⊢ a → b from
+            // Γ,a ⊢ b — Coq λ-abstracts the hypothesis.
             writeln!(
                 out,
-                "Theorem {name} : {concl_rocq}.\nAdmitted. (* deduct from s{} and s{} *)",
+                "Theorem {name} : {concl_rocq}.\nProof. exact (fun _h_s{} => s{}). Qed.",
                 a.0, b.0,
             )
             .unwrap();
         }
         StepBody::Beta { redex } => {
+            // v0.19 K-full: real proof term. β-reduction yields
+            // `redex = reduct`; Coq's kernel proves it
+            // definitionally via `eq_refl`.
             writeln!(
                 out,
-                "Theorem {name} : {concl_rocq}.\nAdmitted. (* beta-redex: {} *)",
+                "Theorem {name} : {concl_rocq}.\nProof. exact eq_refl. Qed. (* β-reduce: {} *)",
                 escape_for_comment(&render_term(redex)),
             )
             .unwrap();
         }
         StepBody::Abs { var, eq } => {
+            // v0.19 K-full: real proof term. Abs lifts pointwise
+            // equality to function-equality via Coq's
+            // `functional_extensionality`. Requires the
+            // FunExt classical family — the marker layer must
+            // include it for the emit to type-check.
             writeln!(
                 out,
-                "Theorem {name} : {concl_rocq}.\nAdmitted. (* abs over {} from s{} *)",
+                "Theorem {name} : {concl_rocq}.\nProof. exact (functional_extensionality _ _ (fun {} => s{})). Qed.",
                 var.name, eq.0,
             )
             .unwrap();
         }
         StepBody::Inst { thm, .. } => {
+            // v0.19 K-full: real proof term. The instantiation
+            // payload is left for Coq's elaborator to infer
+            // from the goal type.
             writeln!(
                 out,
-                "Theorem {name} : {concl_rocq}.\nAdmitted. (* instantiate s{} *)",
+                "Theorem {name} : {concl_rocq}.\nProof. exact s{}. Qed.",
                 thm.0,
             )
             .unwrap();
@@ -273,7 +286,7 @@ fn emit_step(step: &Step, out: &mut String) {
         StepBody::InstType { thm, .. } => {
             writeln!(
                 out,
-                "Theorem {name} : {concl_rocq}.\nAdmitted. (* type-instantiate s{} *)",
+                "Theorem {name} : {concl_rocq}.\nProof. exact s{}. Qed.",
                 thm.0,
             )
             .unwrap();

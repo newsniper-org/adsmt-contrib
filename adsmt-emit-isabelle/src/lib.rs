@@ -201,33 +201,44 @@ fn emit_step(step: &Step, out: &mut String) {
             .unwrap();
         }
         StepBody::Deduct { a, b } => {
+            // v0.19 K-full: real Isar proof via `using ... by blast`.
+            // Isabelle's blast tactic handles propositional
+            // deduction over the supplied hypotheses.
             writeln!(
                 out,
-                "lemma {name}: \"{concl_isa}\" sorry  (* deduct s{} s{} *)",
+                "lemma {name}: \"{concl_isa}\" using s{} s{} by blast",
                 a.0, b.0,
             )
             .unwrap();
         }
         StepBody::Beta { redex } => {
+            // v0.19 K-full: β-reduction yields a definitional
+            // equality; Isabelle's `simp` discharges it.
             writeln!(
                 out,
-                "lemma {name}: \"{concl_isa}\" sorry  (* beta-redex: {} *)",
+                "lemma {name}: \"{concl_isa}\" by simp  (* β-reduce: {} *)",
                 escape_for_comment(&render_term(redex)),
             )
             .unwrap();
         }
         StepBody::Abs { var, eq } => {
+            // v0.19 K-full: function-equality from pointwise
+            // equality. Isabelle's `ext` rule + the pointwise
+            // proof discharge it.
             writeln!(
                 out,
-                "lemma {name}: \"{concl_isa}\" sorry  (* abs over {} from s{} *)",
-                var.name, eq.0,
+                "lemma {name}: \"{concl_isa}\" using s{} by (rule ext)  (* abs over {} *)",
+                eq.0, var.name,
             )
             .unwrap();
         }
         StepBody::Inst { thm, .. } => {
+            // v0.19 K-full: Isabelle's `OF` / type unification
+            // handles instantiation automatically when the goal
+            // type is concrete enough.
             writeln!(
                 out,
-                "lemma {name}: \"{concl_isa}\" sorry  (* instantiate s{} *)",
+                "lemma {name}: \"{concl_isa}\" using s{} by simp",
                 thm.0,
             )
             .unwrap();
@@ -235,7 +246,7 @@ fn emit_step(step: &Step, out: &mut String) {
         StepBody::InstType { thm, .. } => {
             writeln!(
                 out,
-                "lemma {name}: \"{concl_isa}\" sorry  (* type-instantiate s{} *)",
+                "lemma {name}: \"{concl_isa}\" using s{} by simp",
                 thm.0,
             )
             .unwrap();
