@@ -1,7 +1,7 @@
 //! Rocq (Coq) backend for adsmt-cert certificates.
 //!
 //! Produces a `.v` source file that re-states an adsmt
-//! [`Certificate`](adsmt_cert::Certificate) as a sequence of
+//! [`Certificate`] as a sequence of
 //! `Axiom` / `Theorem ... Proof. ... Qed.` declarations. Each cert
 //! step becomes a named Rocq entity whose statement is the step's
 //! sequent conclusion; the conclusion step is exposed as
@@ -130,18 +130,14 @@ pub fn try_emit_rocq(cert: &Certificate) -> Result<String, MissingImports> {
     out.push_str("Set Default Proof Mode \"Ltac2\".\n");
 
     // Classical-axiom imports (between fixed prelude and Module).
-    let mut classical_emitted = false;
+    // The trailing blank line separates this block from the
+    // Module wrapper regardless of whether any imports landed.
     for fam in resolved.iter() {
         if let Some(line) = rocq_import_line(fam) {
             writeln!(out, "{line}").unwrap();
-            classical_emitted = true;
         }
     }
-    if classical_emitted {
-        out.push('\n');
-    } else {
-        out.push('\n');
-    }
+    out.push('\n');
 
     out.push_str("Module AdsmtCert.\n\n");
 

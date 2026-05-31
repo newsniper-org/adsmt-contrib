@@ -1,7 +1,7 @@
 //! Isabelle/HOL backend for adsmt-cert certificates.
 //!
 //! Produces a `.thy` source file that re-states an adsmt
-//! [`Certificate`](adsmt_cert::Certificate) as a sequence of
+//! [`Certificate`] as a sequence of
 //! `axiomatization` / `lemma ... by ...` declarations. Each cert
 //! step becomes a named entity in the theory; the conclusion is
 //! exposed as `theorem result: "<concl>" using s<final> by simp`.
