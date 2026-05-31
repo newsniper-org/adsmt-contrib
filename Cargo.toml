@@ -6,9 +6,16 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0"
-edition = "2021"
-rust-version = "1.75"
+# v1.0.0 — aligned with adsmt main workspace at the v1.0.0
+# stable cut window. Per user instruction 2026-05-31, the
+# adsmt-contrib workspace tracks the adsmt main version
+# directly; `contributions/*` submodules under adsmt main
+# stay on their own version lines independently.
+version = "1.0.0"
+edition = "2024"
+# Matches adsmt main's floor (stable `proc_macro::Span::file`
+# required by `adsmt-heuristic-checker-macros` since v0.18).
+rust-version = "1.88"
 license = "BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later"
 
 [workspace.dependencies]
@@ -24,8 +31,10 @@ adsmt-core = { path = "../AD1/adsmt-core" }
 
 # Published-form alternative — uncomment to consume adsmt via git
 # rev pin instead of the local path. The rev must point at a
-# commit on adsmt-main where the prover_emit::common anchor is
-# wired in (i.e. ≥ 91e614a).
+# commit on adsmt-main at or after the v1.0.0 cut (the v0.21
+# K-full + v0.23 phase 1 freeze + RC1.2 two-watched literals
+# all need to be present for the contrib backends to compile
+# against the current emit shape).
 #
-# adsmt-cert = { git = "https://github.com/Honey-Be/adsmt-private.git", rev = "91e614a" }
-# adsmt-core = { git = "https://github.com/Honey-Be/adsmt-private.git", rev = "91e614a" }
+# adsmt-cert = { git = "https://github.com/Honey-Be/adsmt-private.git", tag = "v1.0.0" }
+# adsmt-core = { git = "https://github.com/Honey-Be/adsmt-private.git", tag = "v1.0.0" }

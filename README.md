@@ -28,16 +28,25 @@ Tri-licensed under any of:
 
 | Crate | Tests | Notes |
 |---|---|---|
-| `adsmt-emit-rocq` | 15/15 ✓ | Ltac2-only; mirrors Lean step mapping. v0.19: Trans + EqMp emit real proof terms (Rocq side K landed); two-pass scan=true wiring (A.5). |
-| `adsmt-emit-isabelle` | 11/11 ✓ | HOL via Isar; `bool` for the proposition family. v0.19: two-pass scan=true wiring (A.5; no-op on Main-classical Isabelle but shape parity preserved). |
+| `adsmt-emit-rocq` | 15/15 ✓ | Ltac2-only; mirrors Lean step mapping. **v0.21 K-full**: every compound rule (`Trans`, `EqMp`, `Deduct`, `Abs`, `Beta`, `Inst`, `InstType`) emits real proof terms — no `Admitted.` stubs remain. **v0.19 A.5**: two-pass scan=true wiring. |
+| `adsmt-emit-isabelle` | 11/11 ✓ | HOL via Isar; `bool` for the proposition family. **v0.21 K-full**: same as Rocq — every compound rule emits real Isar proof bodies. **v0.19 A.5**: two-pass scan=true wiring (no-op on Main-classical Isabelle but shape parity preserved). |
 
-The proof-side of compound kernel rules (`Deduct`, `Abs`,
-`Beta`, `Inst`, `InstType`) currently emits the *correct
-statement type* with the proof body as a `sorry` / `Admitted.`
-stub. Trans + EqMp already emit real proof terms on Rocq and
-Lean. The remaining reconstruction is tracked in the adsmt v0.19
-cycle (item 19A.1 K-full) and lands here lockstep across all
-three backends.
+The compound-rule reconstruction completed across **all three
+backends** (Lean / Rocq / Isabelle) by the close of adsmt's
+v0.21 cycle. No backend ships `sorry` / `Admitted.` placeholders
+for kernel-rule bodies any more.
+
+### v0.23 phase 1 freeze implications
+
+adsmt's v0.23 cycle landed the v1.0 phase 1 surface freeze
+(C ABI / SMT-LIB dialect / certificate format). The cert AST
+consumed by these backends — every `StepBody` variant, the 6
+closed `StepPattern` variants + 3 derived helpers, the
+`MidBlock` / `PatternMarker` cross-cutting shapes — is now
+frozen under semver per `adsmt-cert/CERT_POLICY.md`. Adding a
+new backend in this repo means consuming the frozen surface;
+the lockstep rule in `prover_emit_policy.md` continues to
+bind every backend's emit shape.
 
 ## Adding a new ITP backend
 
@@ -64,10 +73,11 @@ When adding a fourth ITP target (HOL Light, Agda, …):
    propagate without backend-side reimplementation.
 4. **Per-step mapping**: the policy document in the adsmt main
    repo's `memory/prover_emit_policy.md` § "Per-step mapping"
-   has the canonical table. Trans + EqMp emit real proof terms;
-   the remaining five compound rules (`Deduct / Abs / Beta /
-   Inst / InstType`) emit "stub-shaped" placeholders with the
-   correct statement type until v0.19's K-full reconstruction.
+   has the canonical table. **All 12 StepBody variants** must
+   be handled (Assume, Refl, Trans, Abs, Beta, EqMp, Deduct,
+   Inst, InstType, Theory, Instance, Assumed); compound-rule
+   real proof-term reconstruction is the v0.21 K-full
+   baseline.
 5. **Two-pass scan**: every backend implements the v0.19 A.5
    two-pass shape — `render_body(cert)` produces the
    preliminary text, `resolve_imports_with_scan(...,
@@ -87,10 +97,36 @@ When adding a fourth ITP target (HOL Light, Agda, …):
 
 ## Versioning
 
-Each contrib backend ships independent semver. The in-tree
-`adsmt-cert` dep is consumed via local path during development;
-published builds switch to a git-rev or crates.io pin.
+This contrib workspace tracks the **adsmt main version
+directly** — currently `1.0.0`, aligned with adsmt main at
+the v1.0.0 stable cut window (user instruction 2026-05-31).
+The version field in this `Cargo.toml`'s `[workspace.package]`
+matches `~/AD1/Cargo.toml`.
 
-The contrib repo itself stays separate from the main adsmt repo
-to keep the in-tree-Lean / out-of-tree-everything-else split
-clean. v1.0 of adsmt will revisit the boundary.
+The in-tree `adsmt-cert` dep is consumed via local path
+during development; published builds switch to a git-rev or
+crates.io pin (see the commented-out alternative at the end
+of `Cargo.toml`'s `[workspace.dependencies]` block —
+post-v1.0 published form references the `v1.0.0` git tag).
+
+## 21E.1 outcome — bidirectional embed
+
+adsmt's v0.21 cycle settled the P5 architectural decision on
+2026-05-30 as **option 5: bidirectional embed**. The
+implications for this repo are:
+
+- **Out-of-tree stays out-of-tree.** This repo continues to
+  host the non-Lean backends; adsmt's in-tree `lean_emit` is
+  the reference, and `~/adsmt-contrib/`'s Rocq + Isabelle
+  backends mirror it under the lockstep rule.
+- **No absorption into adsmt main.** The earlier "v1.0 of
+  adsmt will revisit the boundary" language is settled — the
+  boundary stays where it is.
+- **Upstream contribution path is open.** Backends or shared
+  anchors can flow upstream to OxiZ as Apache-2 contributions
+  (per `memory/oxiz_relationship.md` § "P5 outcome") on the
+  same cycle-by-cycle negotiation basis as the rest of the
+  Path A+B integration.
+- **License flow unchanged.** This repo stays triple BSD-2 /
+  Apache-2 / LGPL-2.1+ matching adsmt main; OxiZ-side
+  contributions go under Apache-2.
