@@ -109,6 +109,44 @@ crates.io pin (see the commented-out alternative at the end
 of `Cargo.toml`'s `[workspace.dependencies]` block —
 post-v1.0 published form references the `v1.0.0` git tag).
 
+## Channels
+
+This repo mirrors adsmt main's Debian-style channel model
+(introduced 2026-05-31 per user instruction):
+
+| Channel | Branch | Purpose |
+|---|---|---|
+| `unstable` (sid) | `main` | Active development; new backend code lands here first |
+| `testing` | `testing` | Stabilisation candidates promoted from `main`, aligned with adsmt main's `testing` |
+| `stable` | `v1.0.0` (tag) | Released versions, cut in lockstep with adsmt main's stable cuts |
+
+Lockstep with adsmt main:
+
+- Every adsmt-contrib commit on `main` should target an adsmt
+  `main`-rev (current development) or `testing`-rev (release
+  prep) that the contrib code is known to build against.
+- The `testing` branch is forked from `main` whenever adsmt
+  main forks its own `testing` branch — initial fork point in
+  this repo is commit `774edcf` (2026-05-31), matching the
+  adsmt main `testing` fork window.
+- Stable cuts happen *after* adsmt main cuts its own stable.
+  The `v1.0.0` tag here is placed on the `main` commit whose
+  `adsmt-cert` / `adsmt-core` git-pin references the adsmt
+  main `v1.0.0` tag.
+
+Consumers may pin to any of the three channels:
+
+```toml
+# In your Cargo.toml — production / library code:
+adsmt-emit-rocq = { git = "https://github.com/newsniper-org/adsmt-contrib", tag = "v1.0.0" }
+
+# Following testing for pre-stable validation:
+adsmt-emit-rocq = { git = "https://github.com/newsniper-org/adsmt-contrib", branch = "testing" }
+
+# Bleeding-edge development:
+adsmt-emit-rocq = { git = "https://github.com/newsniper-org/adsmt-contrib", branch = "main" }
+```
+
 ## 21E.1 outcome — bidirectional embed
 
 adsmt's v0.21 cycle settled the P5 architectural decision on
