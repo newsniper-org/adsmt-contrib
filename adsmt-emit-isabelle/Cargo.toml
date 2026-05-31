@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 description = "Isabelle/HOL backend for adsmt-cert certificates. Mirrors the Lean emit shape exactly using Isar."
-repository = "https://github.com/newsniper-org/adsmt-contrib"
+repository.workspace = true
 
 [dependencies]
 adsmt-cert = { workspace = true }

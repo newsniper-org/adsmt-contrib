@@ -15,26 +15,12 @@ version = "1.0.0"
 edition = "2024"
 # Matches adsmt main's floor (stable `proc_macro::Span::file`
 # required by `adsmt-heuristic-checker-macros` since v0.18).
-rust-version = "1.88"
+#rust-version = "1.88"
+# required by `adsmt` since testing v1.0.0.
+rust-version = "1.96"
 license = "BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later"
+repository = "https://github.com/newsniper-org/adsmt-contrib"
 
 [workspace.dependencies]
-# adsmt-cert provides the cert AST + the prover_emit::common
-# semantic anchors every backend mirrors. Default is a local path
-# dep so development against an unreleased adsmt rev works without
-# a github fetch; published builds replace this with the git rev
-# pin below.
-adsmt-cert = { path = "../AD1/adsmt-cert" }
-# adsmt-core is pulled transitively, but we depend on it directly
-# for `Term` / `Type` constructors in the emit shape.
-adsmt-core = { path = "../AD1/adsmt-core" }
-
-# Published-form alternative — uncomment to consume adsmt via git
-# rev pin instead of the local path. The rev must point at a
-# commit on adsmt-main at or after the v1.0.0 cut (the v0.21
-# K-full + v0.23 phase 1 freeze + RC1.2 two-watched literals
-# all need to be present for the contrib backends to compile
-# against the current emit shape).
-#
-# adsmt-cert = { git = "https://github.com/newsniper-org/adsmt.git", tag = "v1.0.0" }
-# adsmt-core = { git = "https://github.com/newsniper-org/adsmt.git", tag = "v1.0.0" }
+adsmt-cert = { git = "https://github.com/newsniper-org/adsmt.git", branch = "testing" }
+adsmt-core = { git = "https://github.com/newsniper-org/adsmt.git", branch = "testing" }
