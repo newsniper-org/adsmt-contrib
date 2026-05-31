@@ -36,5 +36,5 @@ adsmt-core = { path = "../AD1/adsmt-core" }
 # all need to be present for the contrib backends to compile
 # against the current emit shape).
 #
-# adsmt-cert = { git = "https://github.com/Honey-Be/adsmt-private.git", tag = "v1.0.0" }
-# adsmt-core = { git = "https://github.com/Honey-Be/adsmt-private.git", tag = "v1.0.0" }
+# adsmt-cert = { git = "https://github.com/newsniper-org/adsmt.git", tag = "v1.0.0" }
+# adsmt-core = { git = "https://github.com/newsniper-org/adsmt.git", tag = "v1.0.0" }

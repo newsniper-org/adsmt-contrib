@@ -1,6 +1,6 @@
 # adsmt-contrib
 
-Out-of-tree backends for the [adsmt](https://github.com/Honey-Be/adsmt-private)
+Out-of-tree backends for the [adsmt](https://github.com/newsniper-org/adsmt)
 SMT certificate pipeline.
 
 | Crate | Role |
