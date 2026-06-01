@@ -1,0 +1,50 @@
+# Maintainer: BYUNG-IK YEUN <yeun0908@gmail.com>
+#
+# adsmt-contrib unstable channel — source-only package.
+# Tracks adsmt-contrib's `main` branch (active development).
+#
+# pkgver is git-rev-count based: 1.0.0.dev.r<count>.<short-sha>.
+
+pkgname=adsmt-contrib-src-git
+pkgver=1.0.0.dev.r0.0000000
+pkgrel=1
+pkgdesc='adsmt-contrib unstable-channel (main branch) workspace source tree (out-of-tree Rocq + Isabelle emit backends)'
+arch=('any')
+url='https://github.com/newsniper-org/adsmt-contrib'
+license=('BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later')
+depends=()
+makedepends=('git')
+conflicts=(
+    'adsmt-contrib-src'
+    'adsmt-contrib-src-testing'
+)
+options=('!strip')
+source=("git+${url}.git#branch=main")
+sha256sums=('SKIP')
+
+_repo='adsmt-contrib'
+
+pkgver() {
+    cd "${srcdir}/${_repo}"
+    printf "1.0.0.dev.r%s.%s" \
+        "$(git rev-list --count HEAD)" \
+        "$(git rev-parse --short=8 HEAD)"
+}
+
+package() {
+    cd "${srcdir}/${_repo}"
+    local destdir="${pkgdir}/usr/src/adsmt-contrib"
+    install -dm755 "${destdir}"
+
+    local exclude_args=(
+        --exclude=target
+        --exclude=.git
+        --exclude=node_modules
+    )
+    tar -cf - "${exclude_args[@]}" --exclude="${destdir}" . | tar -xf - -C "${destdir}"
+
+    install -Dm644 LICENSE-BSD.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-BSD.txt"
+    install -Dm644 LICENSE-APACHE.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-APACHE.txt"
+    install -Dm644 LICENSE-LGPL.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-LGPL.txt"
+    install -Dm644 LICENSE.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.txt"
+}

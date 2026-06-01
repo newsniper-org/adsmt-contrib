@@ -1,0 +1,50 @@
+# Maintainer: BYUNG-IK YEUN <yeun0908@gmail.com>
+#
+# adsmt-contrib v1.0.0 stable cut — source-only package.
+#
+# This repo's two crates (adsmt-emit-rocq, adsmt-emit-isabelle) are
+# both `lib` crates with no `[[bin]]` targets, so a binary package
+# does not apply. Downstream consumers either pull the crates via
+# Cargo (git rev pin) or vendor the source.
+#
+# Ships the workspace tree under /usr/src/adsmt-contrib/. The
+# rebuilder picks any cargo features at their own discretion.
+#
+# Sibling channel pkgbases:
+#   adsmt-contrib-src-{testing,git} — testing-branch / main-branch sources
+
+pkgname=adsmt-contrib-src
+pkgver=1.0.0
+pkgrel=1
+pkgdesc='adsmt-contrib v1.0.0 workspace source tree (out-of-tree Rocq + Isabelle emit backends for adsmt certificates)'
+arch=('any')
+url='https://github.com/newsniper-org/adsmt-contrib'
+license=('BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later')
+depends=()
+conflicts=(
+    'adsmt-contrib-src-testing'
+    'adsmt-contrib-src-git'
+)
+options=('!strip')
+source=("${pkgname}-${pkgver}.tar.gz::${url}/archive/refs/tags/v${pkgver}.tar.gz")
+sha256sums=('SKIP')
+
+_srcdir="adsmt-contrib-${pkgver}"
+
+package() {
+    cd "${_srcdir}"
+    local destdir="${pkgdir}/usr/src/adsmt-contrib"
+    install -dm755 "${destdir}"
+
+    local exclude_args=(
+        --exclude=target
+        --exclude=.git
+        --exclude=node_modules
+    )
+    tar -cf - "${exclude_args[@]}" --exclude="${destdir}" . | tar -xf - -C "${destdir}"
+
+    install -Dm644 LICENSE-BSD.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-BSD.txt"
+    install -Dm644 LICENSE-APACHE.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-APACHE.txt"
+    install -Dm644 LICENSE-LGPL.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE-LGPL.txt"
+    install -Dm644 LICENSE.txt "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE.txt"
+}

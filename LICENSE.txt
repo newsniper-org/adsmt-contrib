@@ -1,0 +1,58 @@
+adsmt — license summary
+=======================
+
+The adsmt project is triple-licensed under the user's choice of:
+
+  * BSD 2-Clause "Simplified" License          (LICENSE-BSD.txt)
+  * Apache License, Version 2.0                (LICENSE-APACHE.txt)
+  * GNU Lesser General Public License, v2.1    (LICENSE-LGPL.txt)
+    or, at your option, any later version
+
+SPDX identifier:
+
+    BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later
+
+You may use, copy, modify, and distribute the adsmt source code under
+the terms of any **one** of the three licenses above. The three options
+exist so downstream users can pick the license that fits their
+environment:
+
+  * BSD 2-Clause       — simplest permissive
+  * Apache 2.0         — permissive with an explicit patent grant
+                         and NOTICE handling
+  * LGPL v2.1 or later — weak copyleft, for downstream consumers in
+                         (A)GPL/(L)GPL-only environments (e.g. the
+                         future logicutils merger)
+
+Why three?
+----------
+
+Two design pressures motivate the triple:
+
+  1. The Rust ecosystem expects permissive licensing by default. BSD and
+     Apache cover that ground (BSD for projects that prefer the
+     two-clause simplicity, Apache for those who want the patent grant).
+  2. logicutils — which adsmt will merge with around v1.0 — is intended
+     to remain usable inside (A)GPL/(L)GPL-only environments. LGPL v2.1+
+     keeps that path open without forcing copyleft on permissive users.
+
+Submodule and dependency licenses
+---------------------------------
+
+Code under `external/` is not part of adsmt and is governed by its own
+license:
+
+  * external/logicutils       — see that submodule's LICENSE
+  * external/oxiz             — Apache-2.0 (cool-japan/oxiz)
+  * external/oxiz-contrib-abduction
+                              — Apache-2.0 (newsniper-org/oxiz-contrib-abduction)
+
+Rust crate dependencies (oxiz-sat, oxiz-proof, oxiz-math, cadical, …)
+retain their own licenses; consult each crate's metadata.
+
+Contributing
+------------
+
+By submitting a pull request to this repository, you license your
+contribution under the same triple-license terms above unless you note
+otherwise on the PR.
