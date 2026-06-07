@@ -28,8 +28,8 @@ Tri-licensed under any of:
 
 | Crate | Tests | Notes |
 |---|---|---|
-| `adsmt-emit-rocq` | 15/15 ✓ | Ltac2-only; mirrors Lean step mapping. **v0.21 K-full**: every compound rule (`Trans`, `EqMp`, `Deduct`, `Abs`, `Beta`, `Inst`, `InstType`) emits real proof terms — no `Admitted.` stubs remain. **v0.19 A.5**: two-pass scan=true wiring. |
-| `adsmt-emit-isabelle` | 11/11 ✓ | HOL via Isar; `bool` for the proposition family. **v0.21 K-full**: same as Rocq — every compound rule emits real Isar proof bodies. **v0.19 A.5**: two-pass scan=true wiring (no-op on Main-classical Isabelle but shape parity preserved). |
+| `adsmt-emit-rocq` | 15/15 ✓ | Ltac2-only; mirrors Lean step mapping. **rc.28**: migrated `render_term` to the post-rc.10 `Term(Arc<TermInner>)` API — matches `t.kind()` against `TermInner::*` (the rc.10 R1 enum→struct reshape; the bare `Term::App` etc. are now constructor fns, not variants). **v0.21 K-full**: every compound rule (`Trans`, `EqMp`, `Deduct`, `Abs`, `Beta`, `Inst`, `InstType`) emits real proof terms — no `Admitted.` stubs remain. **v0.19 A.5**: two-pass scan=true wiring. |
+| `adsmt-emit-isabelle` | 11/11 ✓ | HOL via Isar; `bool` for the proposition family. **rc.28**: same post-rc.10 `Term` API migration as Rocq. **v0.21 K-full**: every compound rule emits real Isar proof bodies. **v0.19 A.5**: two-pass scan=true wiring (no-op on Main-classical Isabelle but shape parity preserved). |
 
 The compound-rule reconstruction completed across **all three
 backends** (Lean / Rocq / Isabelle) by the close of adsmt's
@@ -98,15 +98,16 @@ When adding a fourth ITP target (HOL Light, Agda, …):
 ## Versioning
 
 This contrib workspace tracks the **adsmt main version
-directly** — currently `1.0.0`, aligned with adsmt main at
-the v1.0.0 stable cut window (user instruction 2026-05-31).
-The version field in this `Cargo.toml`'s `[workspace.package]`
-matches `~/AD1/Cargo.toml`.
+directly** — currently `1.0.0-rc.28`, matching adsmt main's
+testing-channel version (user instruction 2026-05-31). The
+version field in this `Cargo.toml`'s `[workspace.package]`
+matches `~/AD1/Cargo.toml`. A bare `1.0.0` is cut here only
+*after* adsmt main cuts its own `v1.0.0` stable tag.
 
 The in-tree `adsmt-cert` dep is consumed via local path
-during development; published builds switch to a git-rev or
-crates.io pin (see the commented-out alternative at the end
-of `Cargo.toml`'s `[workspace.dependencies]` block —
+(`../AD1/adsmt-cert`) during development; published builds
+switch to the git-rev pin (see the commented-out alternative
+in `Cargo.toml`'s `[workspace.dependencies]` block —
 post-v1.0 published form references the `v1.0.0` git tag).
 
 ## Channels
