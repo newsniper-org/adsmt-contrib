@@ -5,13 +5,15 @@ members = [
     "adsmt-emit-isabelle",
 ]
 
+# Tracks the adsmt main workspace version DIRECTLY (user
+# instruction 2026-05-31): this field matches `~/AD1/Cargo.toml`'s
+# `[workspace.package] version`.  adsmt main is on the testing
+# channel at `1.0.0-rc.28`; this repo follows in lockstep and only
+# cuts a bare `1.0.0` *after* adsmt main cuts its own `v1.0.0`
+# stable tag.  `contributions/*` submodules under adsmt main stay
+# on their own version lines independently.
 [workspace.package]
-# v1.0.0 — aligned with adsmt main workspace at the v1.0.0
-# stable cut window. Per user instruction 2026-05-31, the
-# adsmt-contrib workspace tracks the adsmt main version
-# directly; `contributions/*` submodules under adsmt main
-# stay on their own version lines independently.
-version = "1.0.0"
+version = "1.0.0-rc.28"
 edition = "2024"
 # Matches adsmt main's floor (stable `proc_macro::Span::file`
 # required by `adsmt-heuristic-checker-macros` since v0.18).
@@ -22,5 +24,9 @@ license = "BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later"
 repository = "https://github.com/newsniper-org/adsmt-contrib"
 
 [workspace.dependencies]
-adsmt-cert = { git = "https://github.com/newsniper-org/adsmt.git", branch = "main" }
-adsmt-core = { git = "https://github.com/newsniper-org/adsmt.git", branch = "main" }
+# Local-path during development (tracks ~/AD1 working tree directly).
+adsmt-cert = { path = "../AD1/adsmt-cert" }
+adsmt-core = { path = "../AD1/adsmt-core" }
+# Published form — switch back to the git pin (or `v1.0.0` tag post-cut):
+#adsmt-cert = { git = "https://github.com/newsniper-org/adsmt.git", branch = "main" }
+#adsmt-core = { git = "https://github.com/newsniper-org/adsmt.git", branch = "main" }

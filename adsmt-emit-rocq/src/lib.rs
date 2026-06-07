@@ -49,7 +49,7 @@ use std::fmt::Write;
 use adsmt_cert::canonical::{Certificate, Step, StepBody};
 use adsmt_cert::prover_emit::common::{escape_for_comment, witness_summary};
 use adsmt_cert::TheoryWitness;
-use adsmt_core::Term;
+use adsmt_core::{Term, TermInner};
 
 /// Emit a self-contained Rocq source string representing `cert`.
 ///
@@ -409,20 +409,24 @@ fn render_term(t: &Term) -> String {
             _ => {}
         }
     }
-    match t {
-        Term::Var(v) => v.name.clone(),
-        Term::Const(c) => c.name.clone(),
-        Term::App(f, x) => {
+    // rc.10 (verus-fork R1) reshaped `Term` from an enum to
+    // `Term(Arc<TermInner>)`; pattern-match through `kind()`
+    // against `TermInner::*` (the bare `Term::App` etc. are now
+    // associated constructor fns, not variants).
+    match t.kind() {
+        TermInner::Var(v) => v.name.clone(),
+        TermInner::Const(c) => c.name.clone(),
+        TermInner::App(f, x) => {
             let f_s = render_term(f);
             let x_s = render_term(x);
-            let x_render = if matches!(**x, Term::App(..) | Term::Lam(..)) {
+            let x_render = if matches!(x.kind(), TermInner::App(..) | TermInner::Lam(..)) {
                 format!("({x_s})")
             } else {
                 x_s
             };
             format!("{f_s} {x_render}")
         }
-        Term::Lam(v, body) => format!(
+        TermInner::Lam(v, body) => format!(
             "(fun {} : {} => {})",
             v.name,
             render_type(&v.ty),
