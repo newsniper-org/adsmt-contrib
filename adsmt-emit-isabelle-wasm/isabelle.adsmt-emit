@@ -1,0 +1,15 @@
+---
+name = "isabelle"
+target = "isabelle"
+version = "1.0.0-rc.31"
+contract = "0.1.0"
+main = "isabelle.wasm"
+wire = "cbor"
+summary = "Isabelle/HOL backend for adsmt certificates"
+license = "BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later"
+repository = "https://github.com/newsniper-org/adsmt-contrib"
+source-lang = "rust"
+---
+#!/usr/bin/env adsmt-env sh
+cargo build --release --target wasm32-wasip1 --bin isabelle
+install -Dm644 "target/wasm32-wasip1/release/isabelle.wasm" "$pkgdir/isabelle.wasm"
