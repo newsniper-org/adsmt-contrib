@@ -1,0 +1,19 @@
+---
+name = "rocq"
+target = "rocq"
+version = "1.0.0-rc.31"
+contract = "0.1.0"
+main = "rocq.wasm"
+wire = "cbor"
+summary = "Rocq (Coq) backend for adsmt certificates — Ltac2 only"
+license = "BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later"
+repository = "https://github.com/newsniper-org/adsmt-contrib"
+source-lang = "rust"
+---
+#!/usr/bin/env adsmt-env sh
+# Compile the Rocq emitter wrapper to a wasip1 command and install
+# it as the package's `main` artifact. $srcdir holds this package's
+# directory (a copy of adsmt-emit-rocq-wasm/ within the contrib
+# workspace); $pkgdir is the staged contents/.
+cargo build --release --target wasm32-wasip1 --bin rocq
+install -Dm644 "target/wasm32-wasip1/release/rocq.wasm" "$pkgdir/rocq.wasm"

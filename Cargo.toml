@@ -3,6 +3,11 @@ resolver = "2"
 members = [
     "adsmt-emit-rocq",
     "adsmt-emit-isabelle",
+    # wasip1 command wrappers — the emit libs compiled to wasm
+    # packages for the adsmt-emit runtime (CBOR certificate on
+    # stdin → prover source on stdout).
+    "adsmt-emit-rocq-wasm",
+    "adsmt-emit-isabelle-wasm",
 ]
 
 # Tracks the adsmt main workspace version DIRECTLY (user
@@ -13,7 +18,7 @@ members = [
 # stable tag.  `contributions/*` submodules under adsmt main stay
 # on their own version lines independently.
 [workspace.package]
-version = "1.0.0-rc.28"
+version = "1.0.0-rc.31"
 edition = "2024"
 # Matches adsmt main's floor (stable `proc_macro::Span::file`
 # required by `adsmt-heuristic-checker-macros` since v0.18).
@@ -24,9 +29,5 @@ license = "BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later"
 repository = "https://github.com/newsniper-org/adsmt-contrib"
 
 [workspace.dependencies]
-# Local-path during development (tracks ~/AD1 working tree directly).
-adsmt-cert = { path = "../AD1/adsmt-cert" }
-adsmt-core = { path = "../AD1/adsmt-core" }
-# Published form — switch back to the git pin (or `v1.0.0` tag post-cut):
-#adsmt-cert = { git = "https://github.com/newsniper-org/adsmt.git", branch = "main" }
-#adsmt-core = { git = "https://github.com/newsniper-org/adsmt.git", branch = "main" }
+adsmt-cert = { git = "https://github.com/newsniper-org/adsmt.git", branch = "main" }
+adsmt-core = { git = "https://github.com/newsniper-org/adsmt.git", branch = "main", features = ["serde"] }
