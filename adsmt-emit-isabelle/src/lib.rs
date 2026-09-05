@@ -126,6 +126,14 @@ pub fn try_emit_isabelle(cert: &Certificate) -> Result<String, MissingImports> {
         out.push('\n');
     }
     out.push_str("*)\n");
+    for sym in unmapped_constants(cert) {
+        writeln!(
+            out,
+            "(* UNMAPPED SYMBOL: `{sym}` is emitted verbatim and may not \
+parse in Isabelle/HOL. *)"
+        )
+        .unwrap();
+    }
     out.push_str("theory AdsmtCert\n  imports Main\nbegin\n\n");
     // A REGISTERED oracle, not `axiomatization`. The acceptance criterion
     // counts trust sources with `Thm_Deps.all_oracles`, and an
@@ -167,6 +175,14 @@ this. *)\noracle adsmt = \\<open>fn ct => ct\\<close>\n\n",
 /// preliminary text. Identical shape to the final emit.
 fn render_body(cert: &Certificate) -> String {
     let mut out = String::new();
+    for sym in unmapped_constants(cert) {
+        writeln!(
+            out,
+            "(* UNMAPPED SYMBOL: `{sym}` is emitted verbatim and may not \
+parse in Isabelle/HOL. *)"
+        )
+        .unwrap();
+    }
     out.push_str("theory AdsmtCert\n  imports Main\nbegin\n\n");
     // A REGISTERED oracle, not `axiomatization`. The acceptance criterion
     // counts trust sources with `Thm_Deps.all_oracles`, and an
@@ -344,6 +360,27 @@ fn render_term(t: &Term) -> String {
     }
     if let Some((head, args)) = adsmt_cert::prover_emit::common::strip_app_head(t) {
         match (head.as_str(), args.len()) {
+            ("<", 2) => {
+                return format!("({} < {})", render_term(&args[0]), render_term(&args[1]))
+            }
+            ("<=", 2) => {
+                return format!("({} \\<le> {})", render_term(&args[0]), render_term(&args[1]))
+            }
+            (">", 2) => {
+                return format!("({} > {})", render_term(&args[0]), render_term(&args[1]))
+            }
+            (">=", 2) => {
+                return format!("({} \\<ge> {})", render_term(&args[0]), render_term(&args[1]))
+            }
+            ("+", 2) => {
+                return format!("({} + {})", render_term(&args[0]), render_term(&args[1]))
+            }
+            ("-", 2) => {
+                return format!("({} - {})", render_term(&args[0]), render_term(&args[1]))
+            }
+            ("*", 2) => {
+                return format!("({} * {})", render_term(&args[0]), render_term(&args[1]))
+            }
             ("not", 1) => return format!("(\\<not> {})", render_term(&args[0])),
             ("and", 2) => {
                 return format!(
@@ -775,4 +812,43 @@ pub fn emit_isabelle_root() -> String {
      options [timeout = 300]\n  \
      theories\n    AdsmtCert\n"
         .to_owned()
+}
+
+/// Constants the emitter knows how to render. Anything else is an
+/// UNMAPPED symbol: adsmt's name is passed through verbatim, which is
+/// how `> x 5` once reached Isabelle as prefix application and failed to
+/// parse. Callers can ask for the list to surface the gap instead of
+/// discovering it downstream.
+pub fn unmapped_constants(cert: &Certificate) -> Vec<String> {
+    const KNOWN: &[&str] = &[
+        "true", "false", "not", "and", "or", "implies", "=>", "iff", "=",
+        "<", "<=", ">", ">=", "+", "-", "*",
+    ];
+    let mut out: Vec<String> = Vec::new();
+    fn walk(t: &Term, known: &[&str], out: &mut Vec<String>) {
+        match t.kind() {
+            TermInner::Const(c) => {
+                let n = c.name.as_str();
+                // Numeric literals render as themselves in every target.
+                let numeric = !n.is_empty()
+                    && n.chars().all(|ch| ch.is_ascii_digit() || ch == '-');
+                if !numeric && !known.contains(&n) && !out.iter().any(|x| x == n) {
+                    out.push(n.to_owned());
+                }
+            }
+            TermInner::App(f, x) => {
+                walk(&f, known, out);
+                walk(&x, known, out);
+            }
+            TermInner::Lam(_, b) => walk(&b, known, out),
+            _ => {}
+        }
+    }
+    for step in &cert.steps {
+        for h in &step.result.hyps {
+            walk(h, KNOWN, &mut out);
+        }
+        walk(&step.result.concl, KNOWN, &mut out);
+    }
+    out
 }
