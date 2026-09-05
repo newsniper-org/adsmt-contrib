@@ -149,19 +149,25 @@ pub fn try_emit_rocq(cert: &Certificate) -> Result<String, MissingImports> {
         out.push('\n');
     }
 
+    emit_oracles(cert, &mut out);
+    out.push_str("Section Proof.\n\n");
+
     for step in &cert.steps {
         emit_step(step, &mut out);
     }
 
-    if let Some(seq) = cert.final_sequent() {
-        let concl_rocq = render_term(&seq.concl);
-        let final_id = format!("s{}", cert.conclusion.0);
+    if cert.final_sequent().is_some() {
+        // Inside the section this is the bare conclusion; closing the
+        // section generalises it over the hypotheses.
         writeln!(
             out,
-            "\nTheorem result : {concl_rocq}.\nProof. exact {final_id}. Qed."
+            "\nTheorem result : {}.\nProof. exact s{}. Qed.",
+            render_term(&cert.final_sequent().expect("checked").concl),
+            cert.conclusion.0
         )
         .unwrap();
     }
+    out.push_str("\nEnd Proof.\n");
     out.push_str("\nEnd AdsmtCert.\n");
     Ok(out)
 }
@@ -180,159 +186,132 @@ fn render_body(cert: &Certificate) -> String {
         }
         out.push('\n');
     }
+    emit_oracles(cert, &mut out);
+    out.push_str("Section Proof.\n\n");
     for step in &cert.steps {
         emit_step(step, &mut out);
     }
-    if let Some(seq) = cert.final_sequent() {
-        let concl_rocq = render_term(&seq.concl);
-        let final_id = format!("s{}", cert.conclusion.0);
+    if cert.final_sequent().is_some() {
+        // Inside the section this is the bare conclusion; closing the
+        // section generalises it over the hypotheses.
         writeln!(
             out,
-            "\nTheorem result : {concl_rocq}.\nProof. exact {final_id}. Qed."
+            "\nTheorem result : {}.\nProof. exact s{}. Qed.",
+            render_term(&cert.final_sequent().expect("checked").concl),
+            cert.conclusion.0
         )
         .unwrap();
     }
+    out.push_str("\nEnd Proof.\n");
     out.push_str("\nEnd AdsmtCert.\n");
     out
 }
 
+/// The conclusion of `id`, if that step exists.
+fn step_concl(cert: &Certificate, id: adsmt_cert::StepId) -> Option<String> {
+    cert.steps.iter().find(|s| s.id == id).map(|s| render_term(&s.result.concl))
+}
+
+/// `[p1; p2]`, `c` -> `p1 -> p2 -> c`; no premises -> just `c`.
+fn rocq_implication_str(prems: &[String], concl: &str) -> String {
+    if prems.is_empty() { concl.to_owned() } else { format!("{} -> {concl}", prems.join(" -> ")) }
+}
+
+/// Oracle axioms for steps no Rocq tactic can replay: theory steps,
+/// type-class instances, abductive markers.
+///
+/// Each is stated as *premises -> conclusion*, never as the bare
+/// conclusion. That is the whole point: `Axiom s2 : False.` is false,
+/// while `Axiom adsmt_s2 : p -> ~p -> False.` is true and merely records
+/// what the theory solver decided. The module stays consistent however
+/// contradictory the certificate's hypotheses are.
+fn emit_oracles(cert: &Certificate, out: &mut String) {
+    let mut any = false;
+    for step in &cert.steps {
+        let name = format!("adsmt_s{}", step.id.0);
+        match &step.body {
+            StepBody::Theory { name: theory_name, witness, parents } => {
+                let prems: Vec<String> =
+                    parents.iter().filter_map(|q| step_concl(cert, *q)).collect();
+                let prop = rocq_implication_str(&prems, &render_term(&step.result.concl));
+                writeln!(out, "(* theory `{theory_name}`; witness: {} *)",
+                         witness_summary_local(witness)).unwrap();
+                writeln!(out, "Axiom {name} : {prop}.").unwrap();
+                any = true;
+            }
+            StepBody::Instance { relation, .. } => {
+                writeln!(out, "(* type-class instance for `{relation}` *)").unwrap();
+                writeln!(out, "Axiom {name} : {}.", render_term(&step.result.concl)).unwrap();
+                any = true;
+            }
+            StepBody::Assumed { formula, explain } => {
+                writeln!(out, "(* abductive marker: {} *)",
+                         escape_for_comment(explain.as_deref().unwrap_or(""))).unwrap();
+                writeln!(out, "Axiom {name} : {}.", render_term(formula)).unwrap();
+                any = true;
+            }
+            _ => {}
+        }
+    }
+    if any { out.push('\n'); }
+}
+
+/// Emit one step *inside* the section.
+///
+/// `Assume` becomes a `Hypothesis`, not an `Axiom`: a hypothesis is
+/// discharged when the section closes, so `result` generalises to
+/// `h1 -> ... -> hn -> concl` and the module never asserts the
+/// hypotheses. Every other replayable step keeps its real proof term.
 fn emit_step(step: &Step, out: &mut String) {
     let name = format!("s{}", step.id.0);
     let concl_rocq = render_term(&step.result.concl);
 
     match &step.body {
         StepBody::Assume(t) => {
-            writeln!(out, "Axiom {name} : {}.", render_term(t)).unwrap();
+            writeln!(out, "Hypothesis {name} : {}.", render_term(t)).unwrap();
         }
         StepBody::Refl(t) => {
             let t_rocq = render_term(t);
-            writeln!(
-                out,
-                "Theorem {name} : {t_rocq} = {t_rocq}.\nProof. reflexivity. Qed."
-            )
-            .unwrap();
+            writeln!(out, "Theorem {name} : {t_rocq} = {t_rocq}.\nProof. reflexivity. Qed.").unwrap();
         }
         StepBody::Trans { lhs, rhs } => {
-            // v0.18 K: real proof term — eq_trans applied to
-            // the two parent step results.
-            writeln!(
-                out,
-                "Theorem {name} : {concl_rocq}.\nProof. exact (eq_trans s{} s{}). Qed.",
-                lhs.0, rhs.0,
-            )
-            .unwrap();
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact (eq_trans s{} s{}). Qed.",
+                     lhs.0, rhs.0).unwrap();
         }
         StepBody::EqMp { iff, p } => {
-            // v0.18 K: real proof term. Coq's `<->` (iff)
-            // is defined as `(A -> B) /\ (B -> A)`, so `proj1`
-            // pulls the forward implication. Then apply to the
-            // proven antecedent.
-            writeln!(
-                out,
-                "Theorem {name} : {concl_rocq}.\nProof. exact (proj1 s{} s{}). Qed.",
-                iff.0, p.0,
-            )
-            .unwrap();
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact (proj1 s{} s{}). Qed.",
+                     iff.0, p.0).unwrap();
         }
         StepBody::Deduct { a, b } => {
-            // v0.19 K-full: real proof term. Γ ⊢ a → b from
-            // Γ,a ⊢ b — Coq λ-abstracts the hypothesis.
-            writeln!(
-                out,
-                "Theorem {name} : {concl_rocq}.\nProof. exact (fun _h_s{} => s{}). Qed.",
-                a.0, b.0,
-            )
-            .unwrap();
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact (fun _h_s{} => s{}). Qed.",
+                     a.0, b.0).unwrap();
         }
         StepBody::Beta { redex } => {
-            // v0.19 K-full: real proof term. β-reduction yields
-            // `redex = reduct`; Coq's kernel proves it
-            // definitionally via `eq_refl`.
-            writeln!(
-                out,
-                "Theorem {name} : {concl_rocq}.\nProof. exact eq_refl. Qed. (* β-reduce: {} *)",
-                escape_for_comment(&render_term(redex)),
-            )
-            .unwrap();
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact eq_refl. Qed. (* β-reduce: {} *)",
+                     escape_for_comment(&render_term(redex))).unwrap();
         }
         StepBody::Abs { var, eq } => {
-            // v0.19 K-full: real proof term. Abs lifts pointwise
-            // equality to function-equality via Coq's
-            // `functional_extensionality`. Requires the
-            // FunExt classical family — the marker layer must
-            // include it for the emit to type-check.
-            writeln!(
-                out,
-                "Theorem {name} : {concl_rocq}.\nProof. exact (functional_extensionality _ _ (fun {} => s{})). Qed.",
-                var.name, eq.0,
-            )
-            .unwrap();
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact (functional_extensionality _ _ (fun {} => s{})). Qed.",
+                     var.name, eq.0).unwrap();
         }
-        StepBody::Inst { thm, .. } => {
-            // v0.19 K-full: real proof term. The instantiation
-            // payload is left for Coq's elaborator to infer
-            // from the goal type.
-            writeln!(
-                out,
-                "Theorem {name} : {concl_rocq}.\nProof. exact s{}. Qed.",
-                thm.0,
-            )
-            .unwrap();
+        StepBody::Inst { thm, .. } | StepBody::InstType { thm, .. } => {
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact s{}. Qed.", thm.0).unwrap();
         }
-        StepBody::InstType { thm, .. } => {
-            writeln!(
-                out,
-                "Theorem {name} : {concl_rocq}.\nProof. exact s{}. Qed.",
-                thm.0,
-            )
-            .unwrap();
+        StepBody::Theory { parents, .. } => {
+            let args: Vec<String> = parents.iter().map(|q| format!("s{}", q.0)).collect();
+            let app = if args.is_empty() {
+                format!("adsmt_s{}", step.id.0)
+            } else {
+                format!("(adsmt_s{} {})", step.id.0, args.join(" "))
+            };
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact {app}. Qed.").unwrap();
         }
-        StepBody::Theory {
-            name: theory_name,
-            witness,
-            parents,
-        } => {
-            writeln!(
-                out,
-                "(* theory `{theory_name}` step; witness: {} *)",
-                witness_summary_local(witness),
-            )
-            .unwrap();
-            if !parents.is_empty() {
-                write!(out, "(* parents:").unwrap();
-                for p in parents {
-                    write!(out, " s{}", p.0).unwrap();
-                }
-                out.push_str(" *)\n");
-            }
-            writeln!(out, "Axiom {name} : {concl_rocq}.").unwrap();
-        }
-        StepBody::Instance { relation, .. } => {
-            writeln!(out, "(* type-class instance for `{relation}` *)").unwrap();
-            writeln!(out, "Axiom {name} : {concl_rocq}.").unwrap();
-        }
-        StepBody::Assumed { formula, explain } => {
-            let explain_str = explain.as_deref().unwrap_or("");
-            writeln!(
-                out,
-                "(* abductive marker: {} *)",
-                escape_for_comment(explain_str),
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "Theorem {name} : {}.\nAdmitted.",
-                render_term(formula),
-            )
-            .unwrap();
+        StepBody::Instance { .. } | StepBody::Assumed { .. } => {
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact adsmt_s{}. Qed.",
+                     step.id.0).unwrap();
         }
     }
 }
-
-/// Use the shared anchor wherever it is reachable. We re-export it
-/// rather than re-implement so any future change to the witness
-/// summary form (e.g. richer DRAT counters) propagates here
-/// automatically.
 fn witness_summary_local(w: &TheoryWitness) -> String {
     witness_summary(w)
 }
@@ -415,7 +394,15 @@ fn render_term(t: &Term) -> String {
     // associated constructor fns, not variants).
     match t.kind() {
         TermInner::Var(v) => v.name.clone(),
-        TermInner::Const(c) => c.name.clone(),
+        TermInner::Const(c) => match c.name.as_str() {
+            // adsmt-core names the boolean constants `true` / `false`
+            // (adsmt-core/src/term.rs:461,466). Those are *values of a
+            // boolean type* in every target here, not propositions, so
+            // emitting them verbatim produces source that does not compile.
+            "true" => "True".to_owned(),
+            "false" => "False".to_owned(),
+            other => other.to_owned(),
+        },
         TermInner::App(f, x) => {
             let f_s = render_term(f);
             let x_s = render_term(x);
@@ -483,14 +470,20 @@ mod tests {
     }
 
     #[test]
-    fn assume_emits_axiom_with_term_statement() {
+    fn assume_becomes_a_section_hypothesis() {
         let mut b = adsmt_cert::canonical::CertBuilder::default();
         let h: ProofHandle = r::assume(&mut b, p()).unwrap();
         let cert = b.snapshot(h.step());
         let s = emit_rocq(&cert);
         // Free vars are Prop in Rocq (Bool → Prop semantic anchor).
         assert!(s.contains("Parameter p : Prop."));
-        assert!(s.contains(&format!("Axiom s{} : p.", h.step().0)));
+        // A hypothesis, not an axiom: the section discharges it, so the
+        // module never asserts it and `result` generalises over it.
+        assert!(s.contains(&format!("Hypothesis s{} : p.", h.step().0)), "{s}");
+        assert!(
+            !s.contains(&format!("Axiom s{} :", h.step().0)),
+            "hypothesis was axiomatized:\n{s}"
+        );
         assert!(s.contains("Theorem result : p."));
         assert!(s.contains("Proof. exact s0. Qed."));
     }
@@ -506,15 +499,18 @@ mod tests {
     }
 
     #[test]
-    fn assumed_marker_emits_admitted_with_explain_comment() {
+    fn assumed_marker_becomes_a_named_oracle() {
         let mut b = adsmt_cert::canonical::CertBuilder::default();
         let h =
             r::assumed(&mut b, p(), Some("needs Functor MyType".into())).unwrap();
         let cert = b.snapshot(h.step());
         let s = emit_rocq(&cert);
-        assert!(s.contains("(* abductive marker: needs Functor MyType *)"));
-        assert!(s.contains("Theorem s0 : p."));
-        assert!(s.contains("Admitted."));
+        assert!(s.contains("(* abductive marker: needs Functor MyType *)"), "{s}");
+        // A NAMED oracle axiom instead of `Admitted.`, so the trust source
+        // is visible instead of hidden.
+        assert!(s.contains("Axiom adsmt_s0 : p."), "{s}");
+        assert!(s.contains("Theorem s0 : p."), "{s}");
+        assert!(!s.contains("Admitted."), "{s}");
     }
 
     #[test]
@@ -524,11 +520,12 @@ mod tests {
         let h = r::assume(&mut b, np).unwrap();
         let cert = b.snapshot(h.step());
         let s = emit_rocq(&cert);
-        assert!(s.contains("Axiom s0 : (~ p)."));
+        assert!(s.contains("Hypothesis s0 : (~ p)."), "{s}");
+        assert!(!s.contains("Axiom s0 :"), "{s}");
     }
 
     #[test]
-    fn theory_step_axiomatizes_with_witness_comment() {
+    fn theory_step_becomes_an_implication_oracle() {
         use adsmt_cert::canonical::{Sequent, StepBody};
         let mut b = adsmt_cert::canonical::CertBuilder::default();
         let assume = r::assume(&mut b, p()).unwrap();
@@ -548,9 +545,13 @@ mod tests {
         );
         let cert = b.snapshot(theory_step);
         let s = emit_rocq(&cert);
-        assert!(s.contains("(* theory `EUF` step"));
-        assert!(s.contains("Opaque(smoke)"));
-        assert!(s.contains(&format!("Axiom s{} : p.", theory_step.0)));
+        // The oracle is stated as PREMISES -> CONCLUSION. That shape is
+        // what keeps the module consistent: a bare conclusion could be
+        // `False`, whereas `p -> False` merely records a decision.
+        assert!(s.contains("witness: Opaque(smoke)"), "{s}");
+        assert!(s.contains(&format!("Axiom adsmt_s{} :", theory_step.0)), "{s}");
+        assert!(!s.contains(&format!("Axiom s{} :", theory_step.0)), "{s}");
+        assert!(s.contains(" -> "), "oracle is not an implication:\n{s}");
     }
 
     // === Classical-axiom-import emission ===

@@ -10,3 +10,7 @@ repository.workspace = true
 [dependencies]
 adsmt-cert = { workspace = true }
 adsmt-core = { workspace = true }
+
+[dev-dependencies]
+adsmt-emit-rocq = { path = "../adsmt-emit-rocq" }
+serde_json = "1"

@@ -122,18 +122,20 @@ pub fn try_emit_isabelle(cert: &Certificate) -> Result<String, MissingImports> {
         out.push('\n');
     }
 
-    for step in &cert.steps {
-        emit_step(step, &mut out);
-    }
+    emit_oracles(cert, &mut out);
 
     if let Some(seq) = cert.final_sequent() {
-        let concl_isa = render_term(&seq.concl);
-        let final_id = format!("s{}", cert.conclusion.0);
-        writeln!(
-            out,
-            "\ntheorem result: \"{concl_isa}\" using {final_id} by simp"
-        )
-        .unwrap();
+        // Premise-preserving: hypotheses are discharged by the lemma
+        // statement, never asserted as axioms.
+        let hyps: Vec<String> = seq.hyps.iter().map(render_term).collect();
+        let prop = isa_implication(&hyps, &render_term(&seq.concl));
+        writeln!(out, "\nlemma result: \"{prop}\"").unwrap();
+        out.push_str("proof -\n");
+        for step in &cert.steps {
+            emit_step(step, &mut out);
+        }
+        writeln!(out, "    show \"{}\" using s{} .", render_term(&seq.concl), cert.conclusion.0).unwrap();
+        out.push_str("qed\n");
     }
     out.push_str("\nend\n");
     Ok(out)
@@ -151,156 +153,132 @@ fn render_body(cert: &Certificate) -> String {
         }
         out.push('\n');
     }
-    for step in &cert.steps {
-        emit_step(step, &mut out);
-    }
+    emit_oracles(cert, &mut out);
     if let Some(seq) = cert.final_sequent() {
-        let concl_isa = render_term(&seq.concl);
-        let final_id = format!("s{}", cert.conclusion.0);
-        writeln!(
-            out,
-            "\ntheorem result: \"{concl_isa}\" using {final_id} by simp"
-        )
-        .unwrap();
+        // Premise-preserving: hypotheses are discharged by the lemma
+        // statement, never asserted as axioms.
+        let hyps: Vec<String> = seq.hyps.iter().map(render_term).collect();
+        let prop = isa_implication(&hyps, &render_term(&seq.concl));
+        writeln!(out, "\nlemma result: \"{prop}\"").unwrap();
+        out.push_str("proof -\n");
+        for step in &cert.steps {
+            emit_step(step, &mut out);
+        }
+        writeln!(out, "    show \"{}\" using s{} .", render_term(&seq.concl), cert.conclusion.0).unwrap();
+        out.push_str("qed\n");
     }
     out.push_str("\nend\n");
     out
 }
 
+/// Conclusion of `id`, if that step exists.
+fn step_concl(cert: &Certificate, id: adsmt_cert::StepId) -> Option<String> {
+    cert.steps.iter().find(|s| s.id == id).map(|s| render_term(&s.result.concl))
+}
+
+/// `[p1; p2]`, `c` -> `p1 ==> p2 ==> c`; no premises -> just `c`.
+fn isa_implication(prems: &[String], concl: &str) -> String {
+    if prems.is_empty() {
+        concl.to_owned()
+    } else {
+        format!("{} \\<Longrightarrow> {concl}", prems.join(" \\<Longrightarrow> "))
+    }
+}
+
+/// Oracle axioms for steps no Isar tactic can replay.
+///
+/// Stated as *premises ==> conclusion*, never as the bare conclusion:
+/// `axiomatization where s2: "False"` is false, whereas
+/// `axiomatization where adsmt_s2: "p ==> ~p ==> False"` is true and
+/// merely records the theory solver's decision, so the theory stays
+/// consistent however contradictory the hypotheses are.
+fn emit_oracles(cert: &Certificate, out: &mut String) {
+    let mut any = false;
+    for step in &cert.steps {
+        let name = format!("adsmt_s{}", step.id.0);
+        match &step.body {
+            StepBody::Theory { name: theory_name, witness, parents } => {
+                let prems: Vec<String> =
+                    parents.iter().filter_map(|q| step_concl(cert, *q)).collect();
+                let prop = isa_implication(&prems, &render_term(&step.result.concl));
+                writeln!(out, "(* theory `{theory_name}`; witness: {} *)",
+                         escape_for_comment(&witness_summary_local(witness))).unwrap();
+                writeln!(out, "axiomatization where {name}: \"{prop}\"").unwrap();
+                any = true;
+            }
+            StepBody::Instance { relation, .. } => {
+                writeln!(out, "(* type-class instance for `{relation}` *)").unwrap();
+                writeln!(out, "axiomatization where {name}: \"{}\"",
+                         render_term(&step.result.concl)).unwrap();
+                any = true;
+            }
+            StepBody::Assumed { formula, explain } => {
+                writeln!(out, "(* abductive marker: {} *)",
+                         escape_for_comment(explain.as_deref().unwrap_or(""))).unwrap();
+                writeln!(out, "axiomatization where {name}: \"{}\"",
+                         render_term(formula)).unwrap();
+                any = true;
+            }
+            _ => {}
+        }
+    }
+    if any { out.push('\n'); }
+}
+
+/// Emit one step as an Isar fact inside the `result` proof.
+///
+/// `Assume` becomes an `assume`, not an axiom: it is discharged by the
+/// enclosing `lemma "h1 ==> ... ==> hn ==> concl"`, so the theory never
+/// asserts the hypotheses.
 fn emit_step(step: &Step, out: &mut String) {
     let name = format!("s{}", step.id.0);
     let concl_isa = render_term(&step.result.concl);
 
     match &step.body {
         StepBody::Assume(t) => {
-            writeln!(
-                out,
-                "axiomatization where {name}: \"{}\"",
-                render_term(t),
-            )
-            .unwrap();
+            writeln!(out, "    assume {name}: \"{}\"", render_term(t)).unwrap();
         }
         StepBody::Refl(t) => {
             let t_isa = render_term(t);
-            writeln!(out, "lemma {name}: \"{t_isa} = {t_isa}\" by simp").unwrap();
+            writeln!(out, "    have {name}: \"{t_isa} = {t_isa}\" by simp").unwrap();
         }
         StepBody::Trans { lhs, rhs } => {
-            writeln!(
-                out,
-                "lemma {name}: \"{concl_isa}\" sorry  (* TODO: trans s{} s{} *)",
-                lhs.0, rhs.0,
-            )
-            .unwrap();
+            writeln!(out, "    have {name}: \"{concl_isa}\" using s{} s{} by simp",
+                     lhs.0, rhs.0).unwrap();
         }
         StepBody::EqMp { iff, p } => {
-            writeln!(
-                out,
-                "lemma {name}: \"{concl_isa}\" sorry  (* TODO: blast s{} s{} *)",
-                iff.0, p.0,
-            )
-            .unwrap();
+            writeln!(out, "    have {name}: \"{concl_isa}\" using s{} s{} by blast",
+                     iff.0, p.0).unwrap();
         }
         StepBody::Deduct { a, b } => {
-            // v0.19 K-full: real Isar proof via `using ... by blast`.
-            // Isabelle's blast tactic handles propositional
-            // deduction over the supplied hypotheses.
-            writeln!(
-                out,
-                "lemma {name}: \"{concl_isa}\" using s{} s{} by blast",
-                a.0, b.0,
-            )
-            .unwrap();
+            writeln!(out, "    have {name}: \"{concl_isa}\" using s{} s{} by blast",
+                     a.0, b.0).unwrap();
         }
         StepBody::Beta { redex } => {
-            // v0.19 K-full: β-reduction yields a definitional
-            // equality; Isabelle's `simp` discharges it.
-            writeln!(
-                out,
-                "lemma {name}: \"{concl_isa}\" by simp  (* β-reduce: {} *)",
-                escape_for_comment(&render_term(redex)),
-            )
-            .unwrap();
+            writeln!(out, "    have {name}: \"{concl_isa}\" by simp (* β-reduce: {} *)",
+                     escape_for_comment(&render_term(redex))).unwrap();
         }
         StepBody::Abs { var, eq } => {
-            // v0.19 K-full: function-equality from pointwise
-            // equality. Isabelle's `ext` rule + the pointwise
-            // proof discharge it.
-            writeln!(
-                out,
-                "lemma {name}: \"{concl_isa}\" using s{} by (rule ext)  (* abs over {} *)",
-                eq.0, var.name,
-            )
-            .unwrap();
+            writeln!(out, "    have {name}: \"{concl_isa}\" using s{} by (simp add: ext) (* abs {} *)",
+                     eq.0, escape_for_comment(&var.name)).unwrap();
         }
-        StepBody::Inst { thm, .. } => {
-            // v0.19 K-full: Isabelle's `OF` / type unification
-            // handles instantiation automatically when the goal
-            // type is concrete enough.
-            writeln!(
-                out,
-                "lemma {name}: \"{concl_isa}\" using s{} by simp",
-                thm.0,
-            )
-            .unwrap();
+        StepBody::Inst { thm, .. } | StepBody::InstType { thm, .. } => {
+            writeln!(out, "    have {name}: \"{concl_isa}\" using s{} by blast", thm.0).unwrap();
         }
-        StepBody::InstType { thm, .. } => {
-            writeln!(
-                out,
-                "lemma {name}: \"{concl_isa}\" using s{} by simp",
-                thm.0,
-            )
-            .unwrap();
-        }
-        StepBody::Theory {
-            name: theory_name,
-            witness,
-            parents,
-        } => {
-            writeln!(
-                out,
-                "(* theory `{theory_name}` step; witness: {} *)",
-                witness_summary_local(witness),
-            )
-            .unwrap();
-            if !parents.is_empty() {
-                write!(out, "(* parents:").unwrap();
-                for p in parents {
-                    write!(out, " s{}", p.0).unwrap();
-                }
-                out.push_str(" *)\n");
+        StepBody::Theory { parents, .. } => {
+            let args: Vec<String> = parents.iter().map(|q| format!("s{}", q.0)).collect();
+            if args.is_empty() {
+                writeln!(out, "    have {name}: \"{concl_isa}\" by (rule adsmt_s{})", step.id.0).unwrap();
+            } else {
+                writeln!(out, "    have {name}: \"{concl_isa}\" using adsmt_s{} {} by blast",
+                         step.id.0, args.join(" ")).unwrap();
             }
-            writeln!(
-                out,
-                "axiomatization where {name}: \"{concl_isa}\""
-            )
-            .unwrap();
         }
-        StepBody::Instance { relation, .. } => {
-            writeln!(out, "(* type-class instance for `{relation}` *)").unwrap();
-            writeln!(
-                out,
-                "axiomatization where {name}: \"{concl_isa}\""
-            )
-            .unwrap();
-        }
-        StepBody::Assumed { formula, explain } => {
-            let explain_str = explain.as_deref().unwrap_or("");
-            writeln!(
-                out,
-                "(* abductive marker: {} *)",
-                escape_for_comment(explain_str),
-            )
-            .unwrap();
-            writeln!(
-                out,
-                "lemma {name}: \"{}\" sorry",
-                render_term(formula),
-            )
-            .unwrap();
+        StepBody::Instance { .. } | StepBody::Assumed { .. } => {
+            writeln!(out, "    have {name}: \"{concl_isa}\" by (rule adsmt_s{})", step.id.0).unwrap();
         }
     }
 }
-
 fn witness_summary_local(w: &TheoryWitness) -> String {
     witness_summary(w)
 }
@@ -374,7 +352,15 @@ fn render_term(t: &Term) -> String {
     // associated constructor fns, not variants).
     match t.kind() {
         TermInner::Var(v) => v.name.clone(),
-        TermInner::Const(c) => c.name.clone(),
+        TermInner::Const(c) => match c.name.as_str() {
+            // adsmt-core names the boolean constants `true` / `false`
+            // (adsmt-core/src/term.rs:461,466). Those are *values of a
+            // boolean type* in every target here, not propositions, so
+            // emitting them verbatim produces source that does not compile.
+            "true" => "True".to_owned(),
+            "false" => "False".to_owned(),
+            other => other.to_owned(),
+        },
         TermInner::App(f, x) => {
             let f_s = render_term(f);
             let x_s = render_term(x);
@@ -432,48 +418,96 @@ mod tests {
     }
 
     #[test]
-    fn assume_emits_axiomatization_with_term() {
+    fn assume_is_recorded_not_axiomatized() {
+        // A hypothesis must NOT become an axiom. When every Assume was
+        // axiomatized, a refutation certificate — whose hypotheses are
+        // jointly unsatisfiable by construction — made the theory
+        // inconsistent, and `theorem result` then held vacuously.
         let mut b = adsmt_cert::canonical::CertBuilder::default();
         let h: ProofHandle = r::assume(&mut b, p()).unwrap();
         let cert = b.snapshot(h.step());
         let s = emit_isabelle(&cert);
         assert!(s.contains("consts p :: \"bool\""));
-        assert!(s.contains(&format!("axiomatization where s{}: \"p\"", h.step().0)));
-        assert!(s.contains("theorem result: \"p\" using s0 by simp"));
+        assert!(
+            !s.contains(&format!("axiomatization where s{}:", h.step().0)),
+            "hypothesis was axiomatized:\n{s}"
+        );
+        // It is an Isar `assume`, discharged by the lemma statement.
+        assert!(s.contains("assume s0: \"p\""), "{s}");
+        assert!(s.contains("lemma result:"), "{s}");
     }
 
     #[test]
-    fn refl_emits_simp_lemma() {
+    fn hypotheses_never_become_axioms() {
+        // The verus-fork P0, as a regression test: assume p and assume ~p,
+        // then check the emitted theory does not assert either one.
+        let mut b = adsmt_cert::canonical::CertBuilder::default();
+        let h1 = r::assume(&mut b, p()).unwrap();
+        let np = Term::mk_not(p()).unwrap();
+        let _h2 = r::assume(&mut b, np).unwrap();
+        let cert = b.snapshot(h1.step());
+        let s = emit_isabelle(&cert);
+        for line in s.lines() {
+            let l = line.trim();
+            if l.starts_with("axiomatization where") {
+                assert!(
+                    l.contains("adsmt_result:"),
+                    "an axiom other than the single trust source:\n{l}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn output_carries_no_sorry() {
+        let mut b = adsmt_cert::canonical::CertBuilder::default();
+        let h = r::assumed(&mut b, p(), Some("abductive".into())).unwrap();
+        let cert = b.snapshot(h.step());
+        let s = emit_isabelle(&cert);
+        assert!(!s.contains("sorry"), "sorry hides the gap from thm_oracles:\n{s}");
+    }
+
+    #[test]
+    fn refl_is_proved_not_axiomatized() {
         let mut b = adsmt_cert::canonical::CertBuilder::default();
         let h = r::refl(&mut b, &p()).unwrap();
         let cert = b.snapshot(h.step());
         let s = emit_isabelle(&cert);
-        assert!(s.contains("lemma s0: \"p = p\" by simp"));
+        // Replayable: a real Isar step, not an axiom and not a comment.
+        assert!(s.contains("have s0: \"p = p\" by simp"), "{s}");
+        assert!(!s.contains("axiomatization where s0:"), "{s}");
     }
 
     #[test]
-    fn assumed_marker_emits_sorry_with_explain_comment() {
+    fn assumed_marker_becomes_a_named_oracle() {
         let mut b = adsmt_cert::canonical::CertBuilder::default();
         let h =
             r::assumed(&mut b, p(), Some("needs Functor MyType".into())).unwrap();
         let cert = b.snapshot(h.step());
         let s = emit_isabelle(&cert);
-        assert!(s.contains("(* abductive marker: needs Functor MyType *)"));
-        assert!(s.contains("lemma s0: \"p\" sorry"));
+        // The abductive marker becomes a NAMED oracle axiom, so it shows
+        // up as a trust source instead of hiding behind `sorry`.
+        assert!(s.contains("axiomatization where adsmt_s0:"), "{s}");
+        assert!(s.contains("(* abductive marker: needs Functor MyType *)"), "{s}");
+        assert!(!s.contains("sorry"), "{s}");
     }
 
     #[test]
     fn negated_assumption_uses_isabelle_not_symbol() {
+        // The negation still has to render with Isabelle's symbol — now it
+        // shows up in the recorded step and in the single trust axiom
+        // rather than in a per-step axiom.
         let mut b = adsmt_cert::canonical::CertBuilder::default();
         let np = Term::mk_not(p()).unwrap();
         let h = r::assume(&mut b, np).unwrap();
         let cert = b.snapshot(h.step());
         let s = emit_isabelle(&cert);
-        assert!(s.contains("axiomatization where s0: \"(\\<not> p)\""));
+        assert!(s.contains("\\<not> p"), "{s}");
+        assert!(!s.contains("axiomatization where s0:"), "{s}");
     }
 
     #[test]
-    fn theory_step_axiomatizes_with_witness_comment() {
+    fn theory_step_records_its_witness_without_asserting() {
         use adsmt_cert::canonical::{Sequent, StepBody};
         let mut b = adsmt_cert::canonical::CertBuilder::default();
         let assume = r::assume(&mut b, p()).unwrap();
@@ -493,9 +527,19 @@ mod tests {
         );
         let cert = b.snapshot(theory_step);
         let s = emit_isabelle(&cert);
-        assert!(s.contains("(* theory `EUF` step"));
-        assert!(s.contains("Opaque(smoke)"));
-        assert!(s.contains(&format!("axiomatization where s{}: \"p\"", theory_step.0)));
+        // The witness survives as commentary, and the oracle axiom is
+        // stated as PREMISES ==> CONCLUSION — that shape is what keeps the
+        // theory consistent, since the bare conclusion could be `False`.
+        assert!(s.contains("witness: Opaque(smoke)"), "{s}");
+        assert!(
+            !s.contains(&format!("axiomatization where s{}:", theory_step.0)),
+            "{s}"
+        );
+        assert!(
+            s.contains(&format!("axiomatization where adsmt_s{}:", theory_step.0)),
+            "{s}"
+        );
+        assert!(s.contains("\\<Longrightarrow>"), "oracle is not an implication:\n{s}");
     }
 
     // === Classical-axiom-import validation ===
