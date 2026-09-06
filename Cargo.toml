@@ -29,5 +29,5 @@ license = "BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later"
 repository = "https://github.com/newsniper-org/adsmt-contrib"
 
 [workspace.dependencies]
-adsmt-cert = { path = "../AD1/adsmt-cert" }   # TEMPORARY: local for B-1 verification
-adsmt-core = { path = "../AD1/adsmt-core", features = ["serde"] }   # TEMPORARY
+adsmt-cert = { git = "https://github.com/newsniper-org/adsmt.git", branch = "testing" }
+adsmt-core = { git = "https://github.com/newsniper-org/adsmt.git", branch = "testing", features = ["serde"] }
