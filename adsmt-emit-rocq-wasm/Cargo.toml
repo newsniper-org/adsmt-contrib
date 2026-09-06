@@ -1,10 +1,10 @@
 [package]
 name = "adsmt-emit-rocq-wasm"
-version = "1.0.0-rc.31"
-edition = "2024"
-rust-version = "1.96"
-license = "BSD-2-Clause OR Apache-2.0 OR LGPL-2.1-or-later"
-repository = "https://github.com/newsniper-org/adsmt-contrib"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
 description = "Rocq emitter as a wasip1 command: CBOR certificate on stdin, Rocq (Ltac2) source on stdout. The adsmt-emit-rocq library compiled to a wasm package for the adsmt-emit runtime."
 
 [[bin]]
@@ -12,9 +12,9 @@ name = "rocq"
 path = "src/main.rs"
 
 [dependencies]
-adsmt-emit-rocq = { path = "/home/ybi/adsmt-contrib/adsmt-emit-rocq" }
+adsmt-emit-rocq = { path = "../adsmt-emit-rocq" }
 # adsmt-cert always carries serde (its canonical types derive it
 # unconditionally + it enables adsmt-core/serde), so Certificate is
 # Deserialize without any extra feature here.
-adsmt-cert = { path = "/home/ybi/AD1/adsmt-cert" }
+adsmt-cert = { workspace = true }
 ciborium = "0.2"

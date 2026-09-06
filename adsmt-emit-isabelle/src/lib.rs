@@ -27,10 +27,12 @@
 //! Isabelle/HOL `bool` sort is the proposition family in classical
 //! HOL; semantically equivalent to Lean / Rocq `Prop`.
 
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
 use adsmt_cert::canonical::{Certificate, Step, StepBody};
 use adsmt_cert::prover_emit::common::{escape_for_comment, witness_summary};
+use adsmt_cert::sexpr_render;
 use adsmt_cert::TheoryWitness;
 use adsmt_core::{Term, TermInner};
 
@@ -134,21 +136,50 @@ parse in Isabelle/HOL. *)"
         )
         .unwrap();
     }
-    out.push_str("theory AdsmtCert\n  imports Main\nbegin\n\n");
+    for line in adsmt_cert::recheck::trust_summary(cert, "").lines() {
+        writeln!(out, "(* {line} *)").unwrap();
+    }
+    out.push('\n');
+    let mut imports = String::from("Main");
+    for req in cert.signature.required_imports("isabelle") {
+        imports.push(' ');
+        imports.push_str(req);
+    }
+    writeln!(out, "theory AdsmtCert\n  imports {imports}\nbegin\n").unwrap();
     // A REGISTERED oracle, not `axiomatization`. The acceptance criterion
     // counts trust sources with `Thm_Deps.all_oracles`, and an
     // axiomatization does not appear there — only a registered oracle
     // does. This makes the single trust source both named and countable.
     out.push_str(
-        "(* The one trust source. `Thm_Deps.all_oracles` reports exactly \
-this. *)\noracle adsmt = \\<open>fn ct => ct\\<close>\n\n",
+        "(* Trust source 1 of 2: the solver's own theory decisions. *)\n\
+oracle adsmt = \\<open>fn ct => ct\\<close>\n\n",
     );
+    // A SEPARATE oracle for user-supplied assumptions.
+    //
+    // Constraint (3)(C) rule 1: a user assumption must show up as a
+    // second, distinct trust source. Routing it through the same
+    // `adsmt` oracle would collapse both into one entry of
+    // `Thm_Deps.all_oracles` — the reader would see "1 oracle" and have
+    // no way to tell a theory decision from "assume this CryptHOL fact
+    // holds". Invisible trust is not trust, it is an accident.
+    if cert.steps.iter().any(|s| matches!(s.body, StepBody::Assumed { .. })) {
+        out.push_str(
+            "(* Trust source 2 of 2: USER-SUPPLIED assumptions. These are \
+assumed,\n   not proved: everything below them is conditional on them. *)\n\
+oracle adsmt_assumed = \\<open>fn ct => ct\\<close>\n\n",
+        );
+    }
 
-    let vars = collect_free_vars(cert);
-    if !vars.is_empty() {
-        for (name, ty) in &vars {
-            writeln!(out, "consts {name} :: \"{ty}\"").unwrap();
+    let declared = emit_declarations(cert, &mut out);
+    let mut any_var = false;
+    for (name, ty) in &collect_free_vars(cert) {
+        if declared.contains(name) {
+            continue;
         }
+        writeln!(out, "consts {name} :: \"{ty}\"").unwrap();
+        any_var = true;
+    }
+    if any_var {
         out.push('\n');
     }
 
@@ -183,20 +214,49 @@ parse in Isabelle/HOL. *)"
         )
         .unwrap();
     }
-    out.push_str("theory AdsmtCert\n  imports Main\nbegin\n\n");
+    for line in adsmt_cert::recheck::trust_summary(cert, "").lines() {
+        writeln!(out, "(* {line} *)").unwrap();
+    }
+    out.push('\n');
+    let mut imports = String::from("Main");
+    for req in cert.signature.required_imports("isabelle") {
+        imports.push(' ');
+        imports.push_str(req);
+    }
+    writeln!(out, "theory AdsmtCert\n  imports {imports}\nbegin\n").unwrap();
     // A REGISTERED oracle, not `axiomatization`. The acceptance criterion
     // counts trust sources with `Thm_Deps.all_oracles`, and an
     // axiomatization does not appear there — only a registered oracle
     // does. This makes the single trust source both named and countable.
     out.push_str(
-        "(* The one trust source. `Thm_Deps.all_oracles` reports exactly \
-this. *)\noracle adsmt = \\<open>fn ct => ct\\<close>\n\n",
+        "(* Trust source 1 of 2: the solver's own theory decisions. *)\n\
+oracle adsmt = \\<open>fn ct => ct\\<close>\n\n",
     );
-    let vars = collect_free_vars(cert);
-    if !vars.is_empty() {
-        for (name, ty) in &vars {
-            writeln!(out, "consts {name} :: \"{ty}\"").unwrap();
+    // A SEPARATE oracle for user-supplied assumptions.
+    //
+    // Constraint (3)(C) rule 1: a user assumption must show up as a
+    // second, distinct trust source. Routing it through the same
+    // `adsmt` oracle would collapse both into one entry of
+    // `Thm_Deps.all_oracles` — the reader would see "1 oracle" and have
+    // no way to tell a theory decision from "assume this CryptHOL fact
+    // holds". Invisible trust is not trust, it is an accident.
+    if cert.steps.iter().any(|s| matches!(s.body, StepBody::Assumed { .. })) {
+        out.push_str(
+            "(* Trust source 2 of 2: USER-SUPPLIED assumptions. These are \
+assumed,\n   not proved: everything below them is conditional on them. *)\n\
+oracle adsmt_assumed = \\<open>fn ct => ct\\<close>\n\n",
+        );
+    }
+    let declared = emit_declarations(cert, &mut out);
+    let mut any_var = false;
+    for (name, ty) in &collect_free_vars(cert) {
+        if declared.contains(name) {
+            continue;
         }
+        writeln!(out, "consts {name} :: \"{ty}\"").unwrap();
+        any_var = true;
+    }
+    if any_var {
         out.push('\n');
     }
     emit_oracles(cert, &mut out);
@@ -238,10 +298,23 @@ fn isa_implication(prems: &[String], concl: &str) -> String {
 /// `axiomatization where adsmt_s2: "p ==> ~p ==> False"` is true and
 /// merely records the theory solver's decision, so the theory stays
 /// consistent however contradictory the hypotheses are.
+
+/// The oracle lemma's name for a step.
+///
+/// A USER-SUPPLIED assumption gets a visibly different name from a
+/// theory decision, matching the separate `adsmt_assumed` oracle it is
+/// discharged through (constraint (3)(C) rule 1).
+fn oracle_name(step: &Step) -> String {
+    match &step.body {
+        StepBody::Assumed { .. } => format!("adsmt_assumed_s{}", step.id.0),
+        _ => format!("adsmt_s{}", step.id.0),
+    }
+}
+
 fn emit_oracles(cert: &Certificate, out: &mut String) {
     let mut any = false;
     for step in &cert.steps {
-        let name = format!("adsmt_s{}", step.id.0);
+        let name = oracle_name(step);
         match &step.body {
             StepBody::Theory { name: theory_name, witness, parents } => {
                 let prems: Vec<String> =
@@ -249,7 +322,18 @@ fn emit_oracles(cert: &Certificate, out: &mut String) {
                 let prop = isa_implication(&prems, &render_term(&step.result.concl));
                 writeln!(out, "(* theory `{theory_name}`; witness: {} *)",
                          escape_for_comment(&witness_summary_local(witness))).unwrap();
-                writeln!(out, "{}", isa_oracle_lemma(&name, &prop)).unwrap();
+                // Constraint (3)(B): a user tactic REPLACES the oracle.
+                // Fail-first — Isabelle still checks the proof, so a
+                // tactic that does not close the goal breaks the build
+                // rather than being believed. On success the step stops
+                // being a trust source at all.
+                match cert.signature.tactic_for(step.id, Some(theory_name), "isabelle") {
+                    Some(tac) => {
+                        writeln!(out, "(* user tactic hint (replaces the oracle) *)").unwrap();
+                        writeln!(out, "lemma {name}: \"{prop}\"\n  by {tac}").unwrap();
+                    }
+                    None => writeln!(out, "{}", isa_oracle_lemma(&name, &prop)).unwrap(),
+                }
                 any = true;
             }
             StepBody::Instance { relation, .. } => {
@@ -259,10 +343,11 @@ fn emit_oracles(cert: &Certificate, out: &mut String) {
                 any = true;
             }
             StepBody::Assumed { formula, explain } => {
-                writeln!(out, "(* abductive marker: {} *)",
+                writeln!(out, "(* USER-SUPPLIED ASSUMPTION (not proved): {} *)",
                          escape_for_comment(explain.as_deref().unwrap_or(""))).unwrap();
                 writeln!(out, "{}",
-                         isa_oracle_lemma(&name, &render_term(formula))).unwrap();
+                         isa_oracle_lemma_via("adsmt_assumed", &name,
+                                              &render_term(formula))).unwrap();
                 any = true;
             }
             _ => {}
@@ -292,6 +377,13 @@ fn emit_step(step: &Step, out: &mut String) {
             writeln!(out, "    have {name}: \"{concl_isa}\" using s{} s{} by simp",
                      lhs.0, rhs.0).unwrap();
         }
+        StepBody::MkComb { fun_eq, arg_eq } => {
+            // HOL's `cong` is exactly this rule — `f = g ⟹ x = y ⟹ f x
+            // = g y` — so the step is a REAL proof rather than an
+            // oracle.
+            writeln!(out, "    have {name}: \"{concl_isa}\" using s{} s{} by (rule cong)",
+                     fun_eq.0, arg_eq.0).unwrap();
+        }
         StepBody::EqMp { iff, p } => {
             writeln!(out, "    have {name}: \"{concl_isa}\" using s{} s{} by blast",
                      iff.0, p.0).unwrap();
@@ -314,19 +406,208 @@ fn emit_step(step: &Step, out: &mut String) {
         StepBody::Theory { parents, .. } => {
             let args: Vec<String> = parents.iter().map(|q| format!("s{}", q.0)).collect();
             if args.is_empty() {
-                writeln!(out, "    have {name}: \"{concl_isa}\" by (rule adsmt_s{})", step.id.0).unwrap();
+                writeln!(out, "    have {name}: \"{concl_isa}\" by (rule {})",
+                         oracle_name(step)).unwrap();
             } else {
                 writeln!(out, "    have {name}: \"{concl_isa}\" using adsmt_s{} {} by blast",
                          step.id.0, args.join(" ")).unwrap();
             }
         }
         StepBody::Instance { .. } | StepBody::Assumed { .. } => {
-            writeln!(out, "    have {name}: \"{concl_isa}\" by (rule adsmt_s{})", step.id.0).unwrap();
+            writeln!(out, "    have {name}: \"{concl_isa}\" by (rule {})",
+                     oracle_name(step)).unwrap();
         }
     }
 }
 fn witness_summary_local(w: &TheoryWitness) -> String {
     witness_summary(w)
+}
+
+
+/// Emit the certificate's declaration context — sorts, datatypes,
+/// function signatures — and return every name it declared.
+///
+/// Constraint (1) rule 1. Without this the emitter reconstructed
+/// declarations by scanning free variables, which cannot recover a sort
+/// no term mentions, a constructor's arity, a selector name, or the
+/// `declare-fun` vs `define-fun` distinction — the measured loss that
+/// left `typedecl`/`datatype` missing from the output entirely.
+fn emit_declarations(cert: &Certificate, out: &mut String) -> BTreeSet<String> {
+    let sig = &cert.signature;
+    // Constraint (3)(A): a user mapping says what a name MEANS in the
+    // target — meaning the emitter cannot infer, and checkable, since
+    // the emitted theory either typechecks or it does not.
+    let render_sort_name = |s: &str| {
+        let mapped = sig.mapped_name(s, "isabelle");
+        if mapped == s { render_sort_name(s) } else { mapped.to_owned() }
+    };
+    let mut declared = BTreeSet::new();
+    if sig.is_empty() {
+        return declared;
+    }
+
+    // Uninterpreted sorts. HOL types are non-empty by construction, so
+    // `typedecl` alone already says what SMT-LIB means — no companion
+    // axiom is needed here (unlike Lean/Rocq).
+    let user_sorts: Vec<_> = sig
+        .sorts
+        .iter()
+        .filter(|s| {
+            // A MAPPED sort already exists in the target, so
+            // re-declaring it would shadow the real one.
+            !s.builtin
+                && !sig.datatypes.iter().any(|d| d.sort_name == s.name)
+                && sig.mapped_name(&s.name, "isabelle") == s.name
+        })
+        .collect();
+    if !user_sorts.is_empty() {
+        out.push_str("(* Uninterpreted sorts *)\n");
+        for s in &user_sorts {
+            writeln!(out, "typedecl {}{}", type_params(s.arity as usize), s.name).unwrap();
+            declared.insert(s.name.clone());
+        }
+        out.push('\n');
+    }
+
+    // Datatypes become real `datatype` declarations, so injectivity and
+    // distinctness of constructors come from the package rather than
+    // being asserted — and Isabelle's own selector syntax gives the
+    // accessors for free.
+    for d in &sig.datatypes {
+        let params: String = if d.params.is_empty() {
+            String::new()
+        } else {
+            let ps: Vec<String> = d.params.iter().map(|p| format!("'{p}")).collect();
+            if ps.len() == 1 { format!("{} ", ps[0]) } else { format!("({}) ", ps.join(", ")) }
+        };
+        let mut alts: Vec<String> = Vec::new();
+        for (i, ctor) in d.constructors.iter().enumerate() {
+            let arity = d.arities.get(i).copied().unwrap_or(0) as usize;
+            let fields = d.field_sorts.get(i);
+            let sels = d.selectors.get(i);
+            match fields {
+                Some(fs) if fs.len() == arity => {
+                    let mut alt = ctor.clone();
+                    for (j, f) in fs.iter().enumerate() {
+                        let ty = render_sort_name(f);
+                        match sels.and_then(|s| s.get(j)) {
+                            Some(sel) => {
+                                write!(alt, " ({sel}: \"{ty}\")").unwrap();
+                                declared.insert(sel.clone());
+                            }
+                            None => write!(alt, " \"{ty}\"").unwrap(),
+                        }
+                    }
+                    alts.push(alt);
+                }
+                _ if arity == 0 => alts.push(ctor.clone()),
+                // Arity without field sorts: we know the constructor
+                // takes arguments but not of what type. Guessing would be
+                // the silent mistranslation rule (1)(2) forbids.
+                _ => {
+                    writeln!(
+                        out,
+                        "(* INCOMPLETE: `{ctor}` takes {arity} argument(s) whose sorts \
+the certificate did not carry *)"
+                    )
+                    .unwrap();
+                    alts.push(ctor.clone());
+                }
+            }
+            declared.insert(ctor.clone());
+        }
+        writeln!(out, "datatype {params}{} = {}", d.sort_name, alts.join(" | ")).unwrap();
+        declared.insert(d.sort_name.clone());
+        out.push('\n');
+    }
+
+    // Functions and constants. A `define-fun` keeps its definition — a
+    // `definition`, not a `consts` — so the defining equation reaches
+    // `simp` instead of being dropped.
+    if !sig.funs.is_empty() {
+        for f in &sig.funs {
+            if sig.mapped_name(&f.name, "isabelle") != f.name {
+                // Mapped to something the target already provides.
+                declared.insert(f.name.clone());
+                continue;
+            }
+            let ty = fun_type_in(sig, &f.params, &f.result);
+            match &f.body {
+                Some(body) => {
+                    let mut unmapped = BTreeSet::new();
+                    match sexpr_render::parse(body) {
+                        Some(sx) => {
+                            let rendered = sexpr_render::render(
+                                &sx,
+                                &sexpr_render::ISABELLE,
+                                &mut unmapped,
+                            );
+                            for u in &unmapped {
+                                writeln!(out, "(* UNMAPPED OPERATOR in `{}`: `{u}` *)", f.name)
+                                    .unwrap();
+                            }
+                            let lhs_args: String =
+                                f.param_names.iter().map(|n| format!(" {n}")).collect();
+                            writeln!(out, "definition {} :: \"{ty}\" where", f.name).unwrap();
+                            writeln!(out, "  \"{}{lhs_args} = {rendered}\"", f.name).unwrap();
+                        }
+                        None => {
+                            writeln!(
+                                out,
+                                "(* UNPARSEABLE define-fun body for `{}`; emitted as \
+uninterpreted *)",
+                                f.name
+                            )
+                            .unwrap();
+                            writeln!(out, "consts {} :: \"{ty}\"", f.name).unwrap();
+                        }
+                    }
+                }
+                None => writeln!(out, "consts {} :: \"{ty}\"", f.name).unwrap(),
+            }
+            declared.insert(f.name.clone());
+        }
+        out.push('\n');
+    }
+    declared
+}
+
+/// `('a, 'b) ` for arity 2; empty for arity 0.
+fn type_params(arity: usize) -> String {
+    if arity == 0 {
+        return String::new();
+    }
+    let ps: Vec<String> = (0..arity).map(|i| format!("'{}", (b'a' + i as u8) as char)).collect();
+    if ps.len() == 1 { format!("{} ", ps[0]) } else { format!("({}) ", ps.join(", ")) }
+}
+
+/// `["Int", "Int"]`, `"Bool"` -> `int \<Rightarrow> int \<Rightarrow> bool`.
+fn fun_type_in(
+    sig: &adsmt_cert::canonical::Signature,
+    params: &[String],
+    result: &str,
+) -> String {
+    let m = |s: &str| {
+        let mapped = sig.mapped_name(s, "isabelle");
+        if mapped == s { render_sort_name(s) } else { mapped.to_owned() }
+    };
+    let mut ty = String::new();
+    for p in params {
+        write!(ty, "{} \\<Rightarrow> ", m(p)).unwrap();
+    }
+    ty.push_str(&m(result));
+    ty
+}
+
+/// A sort NAME as written in the declaration context, mapped the same
+/// way [`render_type`] maps a `Type`.
+fn render_sort_name(s: &str) -> String {
+    match s {
+        "Bool" => "bool".to_owned(),
+        "Int" => "int".to_owned(),
+        "Real" => "real".to_owned(),
+        other => other.to_owned(),
+    }
 }
 
 fn collect_free_vars(cert: &Certificate) -> Vec<(String, String)> {
@@ -450,8 +731,28 @@ fn render_term(t: &Term) -> String {
 /// Render an adsmt [`Type`] as Isabelle/HOL type syntax. adsmt
 /// `Bool` becomes `bool` — the proposition family in HOL.
 fn render_type(ty: &adsmt_core::Type) -> String {
+    use adsmt_core::Type as T;
     if let Some((dom, cod)) = ty.dest_fun() {
         return format!("({} \\<Rightarrow> {})", render_type(&dom), render_type(&cod));
+    }
+    // Isabelle's type application is POSTFIX — `int Seq`, not `Seq int`
+    // — and multi-argument application is tupled: `('a, 'b) Map`.
+    // Rendering the source's prefix form verbatim produces a type that
+    // either fails to parse or, worse, parses as something else.
+    if let T::App(..) = ty {
+        let (head, args) = {
+            let (mut cur, mut args) = (ty, Vec::new());
+            while let T::App(f, a) = cur {
+                args.push(render_type(a));
+                cur = f;
+            }
+            args.reverse();
+            (render_type(cur), args)
+        };
+        return match args.len() {
+            1 => format!("{} {head}", args[0]),
+            _ => format!("({}) {head}", args.join(", ")),
+        };
     }
     match ty.to_string().as_str() {
         "Bool" => "bool".into(),
@@ -469,6 +770,88 @@ mod tests {
 
     fn p() -> Term {
         Term::var("p", Type::bool_())
+    }
+
+
+    /// A certificate whose declaration context exercises every shape:
+    /// an uninterpreted sort, a datatype with a nullary and an
+    /// argument-bearing constructor plus selectors, an uninterpreted
+    /// function, and a defined function.
+    fn cert_with_declarations() -> Certificate {
+        use adsmt_cert::canonical::{DatatypeDecl, FunDecl};
+        let mut b = adsmt_cert::canonical::CertBuilder::default();
+        b.declare_sort("Color", 0);
+        b.declare_datatype(DatatypeDecl {
+            sort_name: "Lst".into(),
+            constructors: vec!["nil".into(), "cons".into()],
+            arities: vec![0, 2],
+            selectors: vec![vec![], vec!["hd".into(), "tl".into()]],
+            field_sorts: vec![vec![], vec!["Int".into(), "Lst".into()]],
+            params: vec![],
+            is_finite: false,
+        });
+        b.declare_fun("f", vec!["Int".into()], "Bool", None);
+        b.signature_mut().funs.push(FunDecl {
+            name: "g".into(),
+            params: vec!["Int".into()],
+            param_names: vec!["x".into()],
+            result: "Int".into(),
+            body: Some("(+ x 1)".into()),
+        });
+        let h: ProofHandle = r::assume(&mut b, p()).unwrap();
+        b.snapshot(h.step())
+    }
+
+    /// Acceptance criterion, constraint (1) rule 3: every sort and every
+    /// datatype of the input must appear in the output AS A DECLARATION.
+    ///
+    /// The measured loss this closes: `typedecl`/`datatype` were absent
+    /// from the output entirely, because declarations were reconstructed
+    /// by scanning free variables — and a sort no term mentions is
+    /// invisible to that scan.
+
+    /// Isabelle's type application is POSTFIX. Rendering the source's
+    /// prefix form verbatim produces a type that either fails to parse or
+    /// parses as something else. Measured against Isabelle2026-RC0:
+    /// `consts xs :: "int Seq"` builds; `"Seq int"` does not mean that.
+    #[test]
+    fn a_higher_kinded_type_is_rendered_structurally() {
+        use adsmt_core::Kind;
+        let seq = Type::const_("Seq", Kind::arrow(Kind::Type, Kind::Type));
+        let applied = Type::app(seq, Type::bool_()).unwrap();
+        assert_eq!(render_type(&applied), "bool Seq");
+    }
+
+    #[test]
+    fn every_declared_sort_and_datatype_reaches_the_output() {
+        let cert = cert_with_declarations();
+        let s = emit_isabelle(&cert);
+        for sort in cert.signature.sorts.iter().filter(|s| !s.builtin) {
+            let declared = s.contains(&format!("typedecl {}", sort.name))
+                || s.contains(&format!("datatype {}", sort.name));
+            assert!(declared, "sort `{}` missing from output:\n{s}", sort.name);
+        }
+        for d in &cert.signature.datatypes {
+            assert!(s.contains(&format!("datatype {}", d.sort_name)), "{s}");
+            for c in &d.constructors {
+                assert!(s.contains(c.as_str()), "ctor `{c}` missing:\n{s}");
+            }
+        }
+    }
+
+    #[test]
+    fn declarations_carry_arity_selectors_and_definitions() {
+        let s = emit_isabelle(&cert_with_declarations());
+        // Isabelle's datatype package gives selectors from the
+        // declaration itself, so the field sorts and accessor names both
+        // ride along in one line.
+        assert!(s.contains(r#"datatype Lst = nil | cons (hd: "int") (tl: "Lst")"#), "{s}");
+        // `declare-fun` vs `define-fun`: uninterpreted vs defined.
+        assert!(s.contains(r#"consts f :: "int \<Rightarrow> bool""#), "{s}");
+        assert!(s.contains(r#"definition g :: "int \<Rightarrow> int" where"#), "{s}");
+        assert!(s.contains(r#""g x = (x + 1)""#), "{s}");
+        // A sort the datatype declares must not ALSO get a `typedecl`.
+        assert!(!s.contains("typedecl Lst"), "{s}");
     }
 
     #[test]
@@ -595,10 +978,21 @@ mod tests {
         let s = emit_isabelle(&cert);
         // The abductive marker becomes a NAMED oracle axiom, so it shows
         // up as a trust source instead of hiding behind `sorry`.
-        assert!(s.contains("(* abductive marker: needs Functor MyType *)"), "{s}");
-        // A lemma discharged by the REGISTERED oracle, so the trust source
-        // is countable via Thm_Deps.all_oracles rather than invisible.
-        assert!(s.contains("lemma adsmt_s0:"), "{s}");
+        assert!(
+            s.contains("(* USER-SUPPLIED ASSUMPTION (not proved): needs Functor MyType *)"),
+            "{s}"
+        );
+        // A lemma discharged by a SEPARATE registered oracle, so
+        // `Thm_Deps.all_oracles` reports it as a SECOND trust source
+        // rather than folding it into the solver's own. Measured against
+        // Isabelle2026-RC0: ORACLE_COUNT=2, NAMES=AdsmtCert.adsmt,
+        // AdsmtCert.adsmt_assumed.
+        assert!(s.contains("oracle adsmt_assumed ="), "{s}");
+        assert!(s.contains("lemma adsmt_assumed_s0:"), "{s}");
+        // `\<^cprop>`, not `\<^cterm>`: a bare `bool` proposition is
+        // rejected with "Oracle's result must have type prop".
+        assert!(s.contains("\\<^cprop>"), "{s}");
+        assert!(s.contains("1 USER-SUPPLIED assumption(s)"), "{s}");
         assert!(s.contains("by (tactic"), "{s}");
         assert!(!s.contains("sorry"), "{s}");
         assert!(!s.contains("axiomatization"), "{s}");
@@ -791,10 +1185,23 @@ mod tests {
 /// it. Going through the oracle makes the trust both named and countable,
 /// which is what the acceptance criterion checks.
 fn isa_oracle_lemma(name: &str, prop: &str) -> String {
+    isa_oracle_lemma_via("adsmt", name, prop)
+}
+
+/// Same, through a NAMED oracle — so a user assumption and a theory
+/// decision are two distinct entries in `Thm_Deps.all_oracles` rather
+/// than one indistinguishable count.
+fn isa_oracle_lemma_via(oracle: &str, name: &str, prop: &str) -> String {
+    // `\<^cprop>`, not `\<^cterm>`: an oracle's result must have type
+    // `prop`. A statement like `q \<Longrightarrow> False` is already a
+    // `prop` and passes either way, but a bare `bool` proposition — the
+    // shape a user assumption takes — is rejected with "Oracle's result
+    // must have type prop" unless it goes through `Trueprop`, which is
+    // exactly what `\<^cprop>` inserts.
     format!(
         "lemma {name}: \"{prop}\"\n  \
          by (tactic \\<open>resolve_tac \\<^context> \
-         [adsmt \\<^cterm>\\<open>{prop}\\<close>] 1\\<close>)"
+         [{oracle} \\<^cprop>\\<open>{prop}\\<close>] 1\\<close>)"
     )
 }
 

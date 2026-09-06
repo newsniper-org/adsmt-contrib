@@ -44,8 +44,10 @@
 //! Bool→Prop semantic anchor from
 //! [`adsmt_cert::prover_emit::common`].
 
+use std::collections::BTreeSet;
 use std::fmt::Write;
 
+use adsmt_cert::sexpr_render;
 use adsmt_cert::canonical::{Certificate, Step, StepBody};
 use adsmt_cert::prover_emit::common::{escape_for_comment, witness_summary};
 use adsmt_cert::TheoryWitness;
@@ -137,8 +139,21 @@ pub fn try_emit_rocq(cert: &Certificate) -> Result<String, MissingImports> {
     }
     out.push_str("*)\n");
     out.push_str("From Stdlib Require Import Logic.\n");
+    let (need_z, need_r) = numeric_imports(cert);
+    if need_z {
+        out.push_str("From Stdlib Require Import ZArith.\n");
+    }
+    if need_r {
+        out.push_str("From Stdlib Require Import Reals.\n");
+    }
+    for req in cert.signature.required_imports("rocq") {
+        writeln!(out, "Require Import {req}.").unwrap();
+    }
     out.push_str("From Ltac2 Require Import Ltac2.\n");
     out.push_str("Set Default Proof Mode \"Ltac2\".\n");
+    if need_z {
+        out.push_str("Open Scope Z_scope.\n");
+    }
 
     // Classical-axiom imports (between fixed prelude and Module).
     // The trailing blank line separates this block from the
@@ -158,9 +173,17 @@ parse in Rocq. *)"
         )
         .unwrap();
     }
+    for line in adsmt_cert::recheck::trust_summary(cert, "").lines() {
+        writeln!(out, "(* {line} *)").unwrap();
+    }
+    out.push('\n');
     out.push_str("Module AdsmtCert.\n\n");
 
-    let vars = collect_free_vars(cert);
+    let declared = emit_declarations(cert, &mut out);
+    let vars: Vec<_> = collect_free_vars(cert)
+        .into_iter()
+        .filter(|(n, _)| !declared.contains(n))
+        .collect();
     if !vars.is_empty() {
         for (name, ty_rocq) in &vars {
             writeln!(out, "Parameter {name} : {ty_rocq}.").unwrap();
@@ -191,7 +214,11 @@ parse in Rocq. *)"
     // Rocq's equivalent of `Thm_Deps.all_oracles`: it lists exactly the
     // axioms `result` leans on, so the trust surface is countable from the
     // artifact instead of having to be taken on faith.
-    out.push_str("\n(* Trust surface: this must list only the `adsmt_s*` oracles. *)\n");
+    out.push_str(
+        "\n(* Trust surface: the `adsmt_s*` oracles, plus the axioms the\n\
+   DECLARATION context introduces (uninterpreted sorts/functions and\n\
+   datatype selectors). Nothing else may appear. *)\n",
+    );
     out.push_str("Print Assumptions AdsmtCert.result.\n");
     Ok(out)
 }
@@ -210,8 +237,16 @@ parse in Rocq. *)"
         )
         .unwrap();
     }
+    for line in adsmt_cert::recheck::trust_summary(cert, "").lines() {
+        writeln!(out, "(* {line} *)").unwrap();
+    }
+    out.push('\n');
     out.push_str("Module AdsmtCert.\n\n");
-    let vars = collect_free_vars(cert);
+    let declared = emit_declarations(cert, &mut out);
+    let vars: Vec<_> = collect_free_vars(cert)
+        .into_iter()
+        .filter(|(n, _)| !declared.contains(n))
+        .collect();
     if !vars.is_empty() {
         for (name, ty_rocq) in &vars {
             writeln!(out, "Parameter {name} : {ty_rocq}.").unwrap();
@@ -257,10 +292,25 @@ fn rocq_implication_str(prems: &[String], concl: &str) -> String {
 /// while `Axiom adsmt_s2 : p -> ~p -> False.` is true and merely records
 /// what the theory solver decided. The module stays consistent however
 /// contradictory the certificate's hypotheses are.
+
+/// The oracle axiom's name for a step.
+///
+/// A USER-SUPPLIED assumption gets a visibly different name from a
+/// theory decision, because `Print Assumptions` lists axioms by name:
+/// were both `adsmt_s<i>`, a reader could not tell "the SAT solver
+/// decided this" from "the user asked us to assume this" (constraint
+/// (3)(C) rule 1).
+fn oracle_name(step: &Step) -> String {
+    match &step.body {
+        StepBody::Assumed { .. } => format!("adsmt_assumed_s{}", step.id.0),
+        _ => format!("adsmt_s{}", step.id.0),
+    }
+}
+
 fn emit_oracles(cert: &Certificate, out: &mut String) {
     let mut any = false;
     for step in &cert.steps {
-        let name = format!("adsmt_s{}", step.id.0);
+        let name = oracle_name(step);
         match &step.body {
             StepBody::Theory { name: theory_name, witness, parents } => {
                 let prems: Vec<String> =
@@ -268,7 +318,18 @@ fn emit_oracles(cert: &Certificate, out: &mut String) {
                 let prop = rocq_implication_str(&prems, &render_term(&step.result.concl));
                 writeln!(out, "(* theory `{theory_name}`; witness: {} *)",
                          witness_summary_local(witness)).unwrap();
-                writeln!(out, "Axiom {name} : {prop}.").unwrap();
+                // Constraint (3)(B): a user tactic REPLACES the oracle.
+                // Fail-first — Rocq still checks it, so a tactic that
+                // does not close the goal breaks the build rather than
+                // being believed. On success the step stops being a
+                // trust source at all.
+                match cert.signature.tactic_for(step.id, Some(theory_name), "rocq") {
+                    Some(tac) => {
+                        writeln!(out, "(* user tactic hint (replaces the oracle) *)").unwrap();
+                        writeln!(out, "Theorem {name} : {prop}.\nProof. {tac} Qed.").unwrap();
+                    }
+                    None => writeln!(out, "Axiom {name} : {prop}.").unwrap(),
+                }
                 any = true;
             }
             StepBody::Instance { relation, .. } => {
@@ -277,7 +338,7 @@ fn emit_oracles(cert: &Certificate, out: &mut String) {
                 any = true;
             }
             StepBody::Assumed { formula, explain } => {
-                writeln!(out, "(* abductive marker: {} *)",
+                writeln!(out, "(* USER-SUPPLIED ASSUMPTION (not proved): {} *)",
                          escape_for_comment(explain.as_deref().unwrap_or(""))).unwrap();
                 writeln!(out, "Axiom {name} : {}.", render_term(formula)).unwrap();
                 any = true;
@@ -310,6 +371,13 @@ fn emit_step(step: &Step, out: &mut String) {
             writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact (eq_trans s{} s{}). Qed.",
                      lhs.0, rhs.0).unwrap();
         }
+        StepBody::MkComb { fun_eq, arg_eq } => {
+            // `f_equal2 (fun f x => f x)` states this rule in Rocq:
+            // from `f = g` and `x = y`, `f x = g y`. A real proof term,
+            // not an oracle.
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact (f_equal2 (fun f x => f x) s{} s{}). Qed.",
+                     fun_eq.0, arg_eq.0).unwrap();
+        }
         StepBody::EqMp { iff, p } => {
             writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact (proj1 s{} s{}). Qed.",
                      iff.0, p.0).unwrap();
@@ -339,13 +407,209 @@ fn emit_step(step: &Step, out: &mut String) {
             writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact {app}. Qed.").unwrap();
         }
         StepBody::Instance { .. } | StepBody::Assumed { .. } => {
-            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact adsmt_s{}. Qed.",
-                     step.id.0).unwrap();
+            writeln!(out, "Theorem {name} : {concl_rocq}.\nProof. exact {}. Qed.",
+                     oracle_name(step)).unwrap();
         }
     }
 }
 fn witness_summary_local(w: &TheoryWitness) -> String {
     witness_summary(w)
+}
+
+
+/// Emit the certificate's declaration context — sorts, datatypes,
+/// function signatures — and return every name it declared.
+///
+/// Constraint (1) rule 1: before this, declarations were reconstructed
+/// by scanning free variables, which cannot recover a sort no term
+/// mentions, a constructor's arity, a selector name, or the
+/// `declare-fun` vs `define-fun` distinction.
+fn emit_declarations(cert: &Certificate, out: &mut String) -> BTreeSet<String> {
+    let sig = &cert.signature;
+    // Constraint (3)(A): a user mapping says what a name MEANS in the
+    // target — meaning the emitter cannot infer, and checkable, since
+    // the emitted theory either typechecks or it does not.
+    let render_sort_name = |s: &str| {
+        let mapped = sig.mapped_name(s, "rocq");
+        if mapped == s { render_sort_name(s) } else { mapped.to_owned() }
+    };
+    let mut declared = BTreeSet::new();
+    if sig.is_empty() {
+        return declared;
+    }
+
+    // Uninterpreted sorts. `Parameter S : Type` does NOT make `S`
+    // inhabited in Rocq, whereas an SMT-LIB sort is non-empty by
+    // definition — hence the companion axiom, without which the
+    // translation would be strictly weaker than the input.
+    let user_sorts: Vec<_> = sig
+        .sorts
+        .iter()
+        .filter(|s| {
+            // A MAPPED sort already exists in the target, so
+            // re-declaring it would shadow the real one.
+            !s.builtin
+                && !sig.datatypes.iter().any(|d| d.sort_name == s.name)
+                && sig.mapped_name(&s.name, "rocq") == s.name
+        })
+        .collect();
+    if !user_sorts.is_empty() {
+        out.push_str("(* Uninterpreted sorts (non-empty, per SMT-LIB) *)\n");
+        for s in &user_sorts {
+            let arrows = "Type -> ".repeat(s.arity as usize);
+            writeln!(out, "Parameter {} : {arrows}Type.", s.name).unwrap();
+            if s.arity == 0 {
+                writeln!(out, "Axiom {}_nonempty : inhabited {}.", s.name, s.name).unwrap();
+            }
+            declared.insert(s.name.clone());
+        }
+        out.push('\n');
+    }
+
+    // Datatypes become real `Inductive` declarations, so constructor
+    // injectivity and distinctness come from the kernel rather than
+    // being asserted — no trust cost.
+    for d in &sig.datatypes {
+        let params: String =
+            d.params.iter().map(|p| format!(" ({p} : Type)")).collect();
+        writeln!(out, "Inductive {}{params} : Type :=", d.sort_name).unwrap();
+        for (i, ctor) in d.constructors.iter().enumerate() {
+            let arity = d.arities.get(i).copied().unwrap_or(0) as usize;
+            match d.field_sorts.get(i) {
+                Some(fs) if fs.len() == arity => {
+                    let mut ty = String::new();
+                    for f in fs {
+                        write!(ty, "{} -> ", render_sort_name(f)).unwrap();
+                    }
+                    writeln!(out, "  | {ctor} : {ty}{}", d.sort_name).unwrap();
+                }
+                _ if arity == 0 => {
+                    writeln!(out, "  | {ctor} : {}", d.sort_name).unwrap();
+                }
+                // Arity without field sorts: guessing the types would be
+                // the silent mistranslation rule (1)(2) forbids.
+                _ => {
+                    writeln!(
+                        out,
+                        "  (* INCOMPLETE: `{ctor}` takes {arity} argument(s) whose sorts \
+the certificate did not carry *)"
+                    )
+                    .unwrap();
+                    writeln!(out, "  | {ctor} : {}", d.sort_name).unwrap();
+                }
+            }
+            declared.insert(ctor.clone());
+        }
+        out.push_str(".\n");
+        declared.insert(d.sort_name.clone());
+
+        // Selectors are partial in SMT-LIB (`hd nil` is unconstrained),
+        // so they are axioms with a characteristic equation rather than
+        // total definitions — which is what the input actually said.
+        for (i, sels) in d.selectors.iter().enumerate() {
+            let Some(ctor) = d.constructors.get(i) else { continue };
+            let Some(fs) = d.field_sorts.get(i) else { continue };
+            if fs.len() != sels.len() {
+                continue;
+            }
+            for (j, sel) in sels.iter().enumerate() {
+                writeln!(
+                    out,
+                    "Parameter {sel} : {} -> {}.",
+                    d.sort_name,
+                    render_sort_name(&fs[j])
+                )
+                .unwrap();
+                let binders: String = fs
+                    .iter()
+                    .enumerate()
+                    .map(|(k, f)| format!(" (x{k} : {})", render_sort_name(f)))
+                    .collect();
+                let args: String = (0..fs.len()).map(|k| format!(" x{k}")).collect();
+                writeln!(
+                    out,
+                    "Axiom {sel}_{ctor} : forall{binders}, {sel} ({ctor}{args}) = x{j}."
+                )
+                .unwrap();
+                declared.insert(sel.clone());
+            }
+        }
+        out.push('\n');
+    }
+
+    // Functions and constants. A `define-fun` keeps its definition — a
+    // `Definition`, not a `Parameter` — so the defining equation stays
+    // available to `simpl`/`reflexivity`.
+    if !sig.funs.is_empty() {
+        for f in &sig.funs {
+            if sig.mapped_name(&f.name, "rocq") != f.name {
+                // Mapped to something the target already provides.
+                declared.insert(f.name.clone());
+                continue;
+            }
+            let ty = fun_type_in(sig, &f.params, &f.result);
+            match &f.body {
+                Some(body) => {
+                    let mut unmapped = BTreeSet::new();
+                    match sexpr_render::parse(body) {
+                        Some(sx) => {
+                            let rendered =
+                                sexpr_render::render(&sx, &sexpr_render::ROCQ, &mut unmapped);
+                            for u in &unmapped {
+                                writeln!(out, "(* UNMAPPED OPERATOR in `{}`: `{u}` *)", f.name)
+                                    .unwrap();
+                            }
+                            let binders: String = f
+                                .param_names
+                                .iter()
+                                .zip(&f.params)
+                                .map(|(n, s)| format!(" ({n} : {})", render_sort_name(s)))
+                                .collect();
+                            writeln!(
+                                out,
+                                "Definition {}{binders} : {} := {rendered}.",
+                                f.name,
+                                render_sort_name(&f.result)
+                            )
+                            .unwrap();
+                        }
+                        None => {
+                            writeln!(
+                                out,
+                                "(* UNPARSEABLE define-fun body for `{}`; emitted as \
+uninterpreted *)",
+                                f.name
+                            )
+                            .unwrap();
+                            writeln!(out, "Parameter {} : {ty}.", f.name).unwrap();
+                        }
+                    }
+                }
+                None => writeln!(out, "Parameter {} : {ty}.", f.name).unwrap(),
+            }
+            declared.insert(f.name.clone());
+        }
+        out.push('\n');
+    }
+    declared
+}
+
+/// `["Int", "Int"]`, `"Bool"` -> `Z -> Z -> Prop`.
+fn fun_type_in(
+    sig: &adsmt_cert::canonical::Signature,
+    params: &[String],
+    result: &str,
+) -> String {
+    let m = |s: &str| {
+        let mapped = sig.mapped_name(s, "rocq");
+        if mapped == s { render_sort_name(s) } else { mapped.to_owned() }
+    };
+    let mut ty = String::new();
+    for p in params {
+        write!(ty, "{} -> ", m(p)).unwrap();
+    }
+    ty.push_str(&m(result));
+    ty
 }
 
 fn collect_free_vars(cert: &Certificate) -> Vec<(String, String)> {
@@ -479,13 +743,82 @@ fn render_term(t: &Term) -> String {
 /// per the cross-ITP semantic anchor; built-in `Int` / `Real`
 /// names round-trip.
 fn render_type(ty: &adsmt_core::Type) -> String {
+    use adsmt_core::Type as T;
     if let Some((dom, cod)) = ty.dest_fun() {
         return format!("({} -> {})", render_type(&dom), render_type(&cod));
     }
+    // A higher-kinded application (`Seq Int`) must be taken apart: sent
+    // through `to_string()` it would carry the SMT-LIB spelling of its
+    // argument into Rocq, which has no `Int`. Rocq's type application is
+    // prefix, like the source.
+    if let T::App(f, a) = ty {
+        let arg = render_type(a);
+        let wrapped = if matches!(&**a, T::App(..)) { format!("({arg})") } else { arg };
+        return format!("{} {wrapped}", render_type(f));
+    }
     match ty.to_string().as_str() {
         "Bool" => "Prop".into(),
+        // Rocq has no `Int`/`Real`: the arithmetic types are `Z` and `R`.
+        // Emitting the SMT-LIB spelling verbatim produced a file that
+        // referenced identifiers Rocq does not have — a silent
+        // mistranslation of exactly the kind constraint (1) rule 2 bans.
+        "Int" => "Z".into(),
+        "Real" => "R".into(),
         other => other.to_string(),
     }
+}
+
+/// A sort NAME as written in the declaration context, mapped the same
+/// way [`render_type`] maps a `Type`.
+fn render_sort_name(s: &str) -> String {
+    match s {
+        "Bool" => "Prop".to_owned(),
+        "Int" => "Z".to_owned(),
+        "Real" => "R".to_owned(),
+        other => other.to_owned(),
+    }
+}
+
+/// Which numeric theories the emitted file needs to import.
+///
+/// Checked against both the declaration context and the free variables,
+/// because a cert built through [`adsmt_cert::recorder`] rather than the
+/// CLI carries no signature.
+fn numeric_imports(cert: &Certificate) -> (bool, bool) {
+    let (mut z, mut r) = (false, false);
+    let mut note = |t: &str| match t {
+        "Int" => z = true,
+        "Real" => r = true,
+        _ => {}
+    };
+    // NOT the builtin sorts: the CLI registers `Int`/`Real`/`Bool`
+    // unconditionally, so their presence says nothing about whether the
+    // problem uses them. Only actual USES count.
+    for s in cert.signature.sorts.iter().filter(|s| !s.builtin) {
+        note(&s.name);
+    }
+    for f in &cert.signature.funs {
+        for p in &f.params {
+            note(p);
+        }
+        note(&f.result);
+    }
+    for d in &cert.signature.datatypes {
+        for fs in &d.field_sorts {
+            for f in fs {
+                note(f);
+            }
+        }
+    }
+    for (_, ty) in collect_free_vars(cert) {
+        if ty.contains('Z') {
+            z = true;
+        }
+        if ty.contains('R') {
+            r = true;
+        }
+    }
+    (z, r)
 }
 
 #[cfg(test)]
@@ -496,6 +829,89 @@ mod tests {
 
     fn p() -> Term {
         Term::var("p", Type::bool_())
+    }
+
+
+    /// A certificate whose declaration context exercises every shape:
+    /// an uninterpreted sort, a datatype with a nullary and an
+    /// argument-bearing constructor plus selectors, an uninterpreted
+    /// function, and a defined function.
+    fn cert_with_declarations() -> Certificate {
+        use adsmt_cert::canonical::{DatatypeDecl, FunDecl};
+        let mut b = adsmt_cert::canonical::CertBuilder::default();
+        b.declare_sort("Color", 0);
+        b.declare_datatype(DatatypeDecl {
+            sort_name: "Lst".into(),
+            constructors: vec!["nil".into(), "cons".into()],
+            arities: vec![0, 2],
+            selectors: vec![vec![], vec!["hd".into(), "tl".into()]],
+            field_sorts: vec![vec![], vec!["Int".into(), "Lst".into()]],
+            params: vec![],
+            is_finite: false,
+        });
+        b.declare_fun("f", vec!["Int".into()], "Bool", None);
+        b.signature_mut().funs.push(FunDecl {
+            name: "g".into(),
+            params: vec!["Int".into()],
+            param_names: vec!["x".into()],
+            result: "Int".into(),
+            body: Some("(+ x 1)".into()),
+        });
+        let h: ProofHandle = r::assume(&mut b, p()).unwrap();
+        b.snapshot(h.step())
+    }
+
+    /// Acceptance criterion, constraint (1) rule 3: every sort and every
+    /// datatype of the input must appear in the output AS A DECLARATION.
+
+    /// Rocq's type application is prefix, but the ARGUMENT still needs its
+    /// own mapping — `Seq Int` names an `Int` Rocq does not have.
+    #[test]
+    fn a_higher_kinded_type_is_rendered_structurally() {
+        use adsmt_core::Kind;
+        let seq = Type::const_("Seq", Kind::arrow(Kind::Type, Kind::Type));
+        let applied = Type::app(seq, Type::bool_()).unwrap();
+        assert_eq!(render_type(&applied), "Seq Prop");
+    }
+
+    #[test]
+    fn every_declared_sort_and_datatype_reaches_the_output() {
+        let cert = cert_with_declarations();
+        let s = emit_rocq(&cert);
+        for sort in cert.signature.sorts.iter().filter(|s| !s.builtin) {
+            let declared = s.contains(&format!("Parameter {} : Type.", sort.name))
+                || s.contains(&format!("Inductive {}", sort.name));
+            assert!(declared, "sort `{}` missing from output:\n{s}", sort.name);
+        }
+        for d in &cert.signature.datatypes {
+            assert!(s.contains(&format!("Inductive {}", d.sort_name)), "{s}");
+            for c in &d.constructors {
+                assert!(s.contains(&format!("| {c} :")), "ctor `{c}` missing:\n{s}");
+            }
+        }
+    }
+
+    #[test]
+    fn declarations_carry_arity_selectors_and_definitions() {
+        let s = emit_rocq(&cert_with_declarations());
+        // Rocq has no `Int`: the arithmetic type is `Z`, and emitting the
+        // SMT-LIB spelling produced a file referencing an identifier Rocq
+        // does not have.
+        assert!(s.contains("| cons : Z -> Lst -> Lst"), "{s}");
+        assert!(s.contains("| nil : Lst"), "{s}");
+        assert!(s.contains("From Stdlib Require Import ZArith."), "{s}");
+        // Selectors are partial in SMT-LIB: an axiom plus its
+        // characteristic equation, not a total definition.
+        assert!(s.contains("Parameter hd : Lst -> Z."), "{s}");
+        assert!(s.contains("hd (cons x0 x1) = x0"), "{s}");
+        assert!(s.contains("Parameter f : Z -> Prop."), "{s}");
+        assert!(s.contains("Definition g (x : Z) : Z := (x + 1)."), "{s}");
+        // A sort the datatype declares must not ALSO be an opaque
+        // Parameter.
+        assert!(!s.contains("Parameter Lst : Type."), "{s}");
+        // An uninterpreted sort is non-empty in SMT-LIB; `Parameter S :
+        // Type` alone does not say that in Rocq.
+        assert!(s.contains("Axiom Color_nonempty : inhabited Color."), "{s}");
     }
 
     #[test]
@@ -575,12 +991,20 @@ mod tests {
             r::assumed(&mut b, p(), Some("needs Functor MyType".into())).unwrap();
         let cert = b.snapshot(h.step());
         let s = emit_rocq(&cert);
-        assert!(s.contains("(* abductive marker: needs Functor MyType *)"), "{s}");
-        // A NAMED oracle axiom instead of `Admitted.`, so the trust source
-        // is visible instead of hidden.
-        assert!(s.contains("Axiom adsmt_s0 : p."), "{s}");
+        assert!(
+            s.contains("(* USER-SUPPLIED ASSUMPTION (not proved): needs Functor MyType *)"),
+            "{s}"
+        );
+        // A NAMED oracle axiom instead of `Admitted.`, and named
+        // `adsmt_assumed_*` so `Print Assumptions` distinguishes a user
+        // assumption from a theory decision (constraint (3)(C) rule 1).
+        // Measured with coqc: the assumption is listed as
+        // `AdsmtCert.adsmt_assumed_s0`.
+        assert!(s.contains("Axiom adsmt_assumed_s0 : p."), "{s}");
         assert!(s.contains("Theorem s0 : p."), "{s}");
+        assert!(s.contains("exact adsmt_assumed_s0."), "{s}");
         assert!(!s.contains("Admitted."), "{s}");
+        assert!(s.contains("1 USER-SUPPLIED assumption(s)"), "{s}");
     }
 
     #[test]
