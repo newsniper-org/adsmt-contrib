@@ -2,7 +2,7 @@
 name = "rocq"
 target = "rocq"
 version = "1.0.0-rc.31"
-contract = "0.1.0"
+contract = "0.2.0"
 main = "rocq.wasm"
 wire = "cbor"
 summary = "Rocq (Coq) backend for adsmt certificates — Ltac2 only"

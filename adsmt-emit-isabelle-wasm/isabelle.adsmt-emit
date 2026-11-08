@@ -2,7 +2,7 @@
 name = "isabelle"
 target = "isabelle"
 version = "1.0.0-rc.31"
-contract = "0.1.0"
+contract = "0.2.0"
 main = "isabelle.wasm"
 wire = "cbor"
 summary = "Isabelle/HOL backend for adsmt certificates"
